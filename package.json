@@ -1,0 +1,25 @@
+{
+  "name": "slack-to-drive-gas",
+  "version": "1.0.0",
+  "description": "",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "clasp:login": "clasp login",
+    "clasp:logout": "clasp logout",
+    "clasp:create": "clasp create --type standalone --title slack-to-drive-gas --rootDir src",
+    "clasp:clone": "clasp clone --rootDir src",
+    "clasp:push": "clasp push",
+    "clasp:pull": "clasp pull",
+    "clasp:open": "clasp open",
+    "clasp:logs": "clasp logs",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@google/clasp": "^3.3.0"
+  }
+}

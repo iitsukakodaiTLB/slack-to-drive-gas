@@ -454,6 +454,24 @@ function toStringSafe_(value) {
   return String(value).trim();
 }
 
+function normalizeTsString_(value) {
+  const raw = toStringSafe_(value);
+  if (!raw) {
+    return "";
+  }
+  return raw.charAt(0) === "'" ? raw.slice(1) : raw;
+}
+
+function setTsCellValue_(range, ts) {
+  const normalized = normalizeTsString_(ts);
+  if (!normalized) {
+    range.clearContent();
+    return;
+  }
+  // Keep Slack ts as plain text to avoid losing fractional part.
+  range.setValue("'" + normalized);
+}
+
 function truncateForCell_(text, maxLength) {
   if (text.length <= maxLength) {
     return text;
@@ -510,12 +528,18 @@ function executeSyncForChannel_(ss, channelSheet, target, runId, startedAt) {
 
       const maxTs = getMaxTsFromMessages_(messages);
       if (maxTs) {
-        channelSheet.getRange(target.rowIndex, COLS.CHANNEL_SYNC_STATE.LIVE_LAST_MESSAGE_TS).setValue(maxTs);
+        setTsCellValue_(
+          channelSheet.getRange(target.rowIndex, COLS.CHANNEL_SYNC_STATE.LIVE_LAST_MESSAGE_TS),
+          maxTs
+        );
         channelSheet.getRange(target.rowIndex, COLS.CHANNEL_SYNC_STATE.LIVE_LAST_MESSAGE_AT).setValue(
           new Date(Number(maxTs) * 1000)
         );
         if (!isBackfill) {
-          channelSheet.getRange(target.rowIndex, COLS.CHANNEL_SYNC_STATE.HISTORY_OLDEST_TS).setValue(maxTs);
+          setTsCellValue_(
+            channelSheet.getRange(target.rowIndex, COLS.CHANNEL_SYNC_STATE.HISTORY_OLDEST_TS),
+            maxTs
+          );
         }
       }
     }
@@ -544,7 +568,7 @@ function readChannelRowSnapshot_(sheet, rowIndex) {
     channelId: toStringSafe_(row[c.CHANNEL_ID - 1]),
     channelNameCurrent: toStringSafe_(row[c.CHANNEL_NAME_CURRENT - 1]),
     syncMode: toStringSafe_(row[c.SYNC_MODE - 1]),
-    historyOldestTs: toStringSafe_(row[c.HISTORY_OLDEST_TS - 1]),
+    historyOldestTs: normalizeTsString_(row[c.HISTORY_OLDEST_TS - 1]),
     historyNextCursor: toStringSafe_(row[c.HISTORY_NEXT_CURSOR - 1]),
     historyInclusive: normalizeBoolean_(row[c.HISTORY_INCLUSIVE - 1], CONFIG.SLACK.HISTORY_INCLUSIVE_DEFAULT),
   };
@@ -572,9 +596,9 @@ function finalizeBackfillIfReady_(threadSheet, channelSheet, rowIndex, channelId
   channelSheet.getRange(rowIndex, c.SYNC_MODE).setValue(SYNC_MODE.LIVE);
   channelSheet.getRange(rowIndex, c.BACKFILL_COMPLETED_AT).setValue(now);
   channelSheet.getRange(rowIndex, c.HISTORY_NEXT_CURSOR).clearContent();
-  const liveLastTs = toStringSafe_(channelSheet.getRange(rowIndex, c.LIVE_LAST_MESSAGE_TS).getValue());
+  const liveLastTs = normalizeTsString_(channelSheet.getRange(rowIndex, c.LIVE_LAST_MESSAGE_TS).getValue());
   if (liveLastTs) {
-    channelSheet.getRange(rowIndex, c.HISTORY_OLDEST_TS).setValue(liveLastTs);
+    setTsCellValue_(channelSheet.getRange(rowIndex, c.HISTORY_OLDEST_TS), liveLastTs);
   }
 }
 
@@ -643,7 +667,10 @@ function processThreadQueueForChannel_(
         appendMessagesToLogs_(fileCtx, channelId, replies, userResolver);
         const maxTs = getMaxTsFromMessages_(replies);
         if (maxTs) {
-          threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.LAST_REPLY_TS_PROCESSED).setValue(maxTs);
+          setTsCellValue_(
+            threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.LAST_REPLY_TS_PROCESSED),
+            maxTs
+          );
         }
       }
 
@@ -661,7 +688,8 @@ function processThreadQueueForChannel_(
         threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.LOCK_UNTIL).clearContent();
       }
       threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.UPDATED_AT).setValue(new Date());
-      channelSheet.getRange(channelRowIndex, COLS.CHANNEL_SYNC_STATE.THREAD_CURRENT_PARENT_TS).setValue(
+      setTsCellValue_(
+        channelSheet.getRange(channelRowIndex, COLS.CHANNEL_SYNC_STATE.THREAD_CURRENT_PARENT_TS),
         item.parentThreadTs
       );
     } catch (error) {
@@ -737,7 +765,7 @@ function listThreadQueueItemsForChannel_(sheet, channelId) {
     }
     items.push({
       rowIndex: rowIndex,
-      parentThreadTs: toStringSafe_(row[COLS.THREAD_QUEUE.PARENT_THREAD_TS - 1]),
+      parentThreadTs: normalizeTsString_(row[COLS.THREAD_QUEUE.PARENT_THREAD_TS - 1]),
       repliesNextCursor: toStringSafe_(row[COLS.THREAD_QUEUE.REPLIES_NEXT_CURSOR - 1]),
       status: status,
       updatedAt: updatedAt,
@@ -782,7 +810,7 @@ function enqueueThreadParents_(threadSheet, channelId, messages) {
     rows.push([
       Utilities.getUuid(),
       channelId,
-      threadTs,
+      "'" + threadTs,
       THREAD_QUEUE_STATUS.PENDING,
       "",
       "",
@@ -811,7 +839,7 @@ function getExistingThreadQueueKeys_(threadSheet, channelId) {
   const keys = [];
   for (let i = 0; i < values.length; i += 1) {
     const rowChannel = toStringSafe_(values[i][COLS.THREAD_QUEUE.CHANNEL_ID - 1]);
-    const threadTs = toStringSafe_(values[i][COLS.THREAD_QUEUE.PARENT_THREAD_TS - 1]);
+    const threadTs = normalizeTsString_(values[i][COLS.THREAD_QUEUE.PARENT_THREAD_TS - 1]);
     if (rowChannel === channelId && threadTs) {
       keys.push(channelId + "::" + threadTs);
     }
@@ -964,6 +992,21 @@ function slackConversationsInfo_(channelId) {
 
 function slackUsersInfo_(userId) {
   return slackApiGet_("users.info", { user: userId });
+}
+
+/**
+ * Like slackUsersInfo_ but returns null on user_not_found instead of throwing
+ * (deleted users, legacy IDs, some bot-only identifiers).
+ */
+function slackUsersInfoOrNull_(userId) {
+  try {
+    return slackUsersInfo_(userId);
+  } catch (e) {
+    if (String(e).indexOf("user_not_found") !== -1) {
+      return null;
+    }
+    throw e;
+  }
 }
 
 function slackApiGet_(method, params) {
@@ -1254,8 +1297,21 @@ function buildUserNameResolver_(ss, maxLookupsPerRun) {
         // Cost guard: skip extra users.info calls in this run.
         return id;
       }
-      const info = slackUsersInfo_(id);
       lookupCount += 1;
+      const info = slackUsersInfoOrNull_(id);
+      if (!info || !info.user) {
+        cache[id] = id;
+        const rowValuesMissing = [[
+          id,
+          "",
+          "",
+          false,
+          true,
+          new Date(),
+        ]];
+        upsertUserCacheRow_(sheet, rowIndexByUserId, id, rowValuesMissing);
+        return id;
+      }
       const user = info.user || {};
       const profile = user.profile || {};
       const displayName = toStringSafe_(profile.display_name || profile.display_name_normalized);
@@ -1271,15 +1327,19 @@ function buildUserNameResolver_(ss, maxLookupsPerRun) {
         !!user.deleted,
         new Date(),
       ]];
-      const existingRow = rowIndexByUserId[id];
-      if (existingRow) {
-        sheet.getRange(existingRow, 1, 1, SHEET_HEADERS.SLACK_USER_CACHE.length).setValues(rowValues);
-      } else {
-        const newRowIndex = sheet.getLastRow() + 1;
-        sheet.getRange(newRowIndex, 1, 1, SHEET_HEADERS.SLACK_USER_CACHE.length).setValues(rowValues);
-        rowIndexByUserId[id] = newRowIndex;
-      }
+      upsertUserCacheRow_(sheet, rowIndexByUserId, id, rowValues);
       return resolved;
     },
   };
+}
+
+function upsertUserCacheRow_(sheet, rowIndexByUserId, userId, rowValues) {
+  const existingRow = rowIndexByUserId[userId];
+  if (existingRow) {
+    sheet.getRange(existingRow, 1, 1, SHEET_HEADERS.SLACK_USER_CACHE.length).setValues(rowValues);
+  } else {
+    const newRowIndex = sheet.getLastRow() + 1;
+    sheet.getRange(newRowIndex, 1, 1, SHEET_HEADERS.SLACK_USER_CACHE.length).setValues(rowValues);
+    rowIndexByUserId[userId] = newRowIndex;
+  }
 }

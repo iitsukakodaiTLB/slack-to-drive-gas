@@ -313,8 +313,9 @@ function isChannelRowEligible_(row, now) {
   }
 
   if (row.status === STATUS.RUNNING) {
+    // 手動キャンセル等で lock が消えたまま RUNNING のゾンビ行を回収する
     if (!row.lockUntil) {
-      return false;
+      return true;
     }
     return row.lockUntil.getTime() <= now.getTime();
   }

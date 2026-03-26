@@ -96,27 +96,26 @@
 | 7   | `sync_mode`                   | `BACKFILL` or `LIVE`                             |
 | 8   | `backfill_completed_at`       | バックフィル完了時刻（未完は空）                                 |
 | 9   | `history_oldest_ts`           | `conversations.history` の次回 `oldest`（排他）         |
-| 10  | `history_latest_ts`           | 必要時のみ上限 `latest`                                 |
-| 11  | `history_next_cursor`         | `conversations.history` ページ継続用                   |
-| 12  | `history_inclusive`           | API パラメータの固定値メモ                                  |
-| 13  | `live_last_message_ts`        | 増分同期の境界 `ts`（排他）                                 |
-| 14  | `thread_current_parent_ts`    | `replies` 処理中の親 `ts`                             |
-| 15  | `replies_next_cursor`         | `conversations.replies` ページ継続用                   |
-| 16  | `thread_queue_ref`            | スレッドキュー参照キー（別シート推奨）                              |
-| 17  | `drive_csv_current_part`      | 現在書き込み先の CSV part（`01` 等）                        |
-| 18  | `drive_jsonl_current_part`    | 現在書き込み先の JSONL part                              |
-| 19  | `drive_csv_current_file_id`   | 現在 part の CSV fileId                             |
-| 20  | `drive_jsonl_current_file_id` | 現在 part の JSONL fileId                           |
-| 21  | `drive_last_renamed_at`       | 改名対応を最後に実施した時刻                                   |
-| 22  | `lock_owner`                  | 実行 UUID（リース所有者）                                  |
-| 23  | `lock_until`                  | リース期限                                            |
-| 24  | `last_success_at`             | 最終成功時刻                                           |
-| 25  | `last_error_at`               | 最終失敗時刻                                           |
-| 26  | `last_error_message`          | エラー要約                                            |
-| 27  | `consecutive_failures`        | 連続失敗回数                                           |
-| 28  | `registered_at`               | 登録日時                                             |
-| 29  | `registered_by`               | 登録者                                              |
-| 30  | `note`                        | 備考                                               |
+| 10  | `history_next_cursor`         | `conversations.history` ページ継続用                   |
+| 11  | `history_inclusive`           | API パラメータの固定値メモ                                  |
+| 12  | `live_last_message_ts`        | 増分同期の境界 `ts`（排他）                                 |
+| 13  | `thread_current_parent_ts`    | `replies` 処理中の親 `ts`                             |
+| 14  | `replies_next_cursor`         | `conversations.replies` ページ継続用                   |
+| 15  | `thread_queue_ref`            | スレッドキュー参照キー（別シート推奨）                              |
+| 16  | `drive_csv_current_part`      | 現在書き込み先の CSV part（`01` 等）                        |
+| 17  | `drive_jsonl_current_part`    | 現在書き込み先の JSONL part                              |
+| 18  | `drive_csv_current_file_id`   | 現在 part の CSV fileId                             |
+| 19  | `drive_jsonl_current_file_id` | 現在 part の JSONL fileId                           |
+| 20  | `drive_last_renamed_at`       | 改名対応を最後に実施した時刻                                   |
+| 21  | `lock_owner`                  | 実行 UUID（リース所有者）                                  |
+| 22  | `lock_until`                  | リース期限                                            |
+| 23  | `last_success_at`             | 最終成功時刻                                           |
+| 24  | `last_error_at`               | 最終失敗時刻                                           |
+| 25  | `last_error_message`          | エラー要約                                            |
+| 26  | `consecutive_failures`        | 連続失敗回数                                           |
+| 27  | `registered_at`               | 登録日時                                             |
+| 28  | `registered_by`               | 登録者                                              |
+| 29  | `note`                        | 備考                                               |
 
 
 ### 4.2 追加シート（推奨）
@@ -241,7 +240,7 @@
 ### 8.1 channel_sync_state
 
 ```csv
-status,channel_id,channel_name_current,priority_interrupt_at,sort_last_run_at,live_last_message_at,sync_mode,backfill_completed_at,history_oldest_ts,history_latest_ts,history_next_cursor,history_inclusive,live_last_message_ts,thread_current_parent_ts,replies_next_cursor,thread_queue_ref,drive_csv_current_part,drive_jsonl_current_part,drive_csv_current_file_id,drive_jsonl_current_file_id,drive_last_renamed_at,lock_owner,lock_until,last_success_at,last_error_at,last_error_message,consecutive_failures,registered_at,registered_by,note
+status,channel_id,channel_name_current,priority_interrupt_at,sort_last_run_at,live_last_message_at,sync_mode,backfill_completed_at,history_oldest_ts,history_next_cursor,history_inclusive,live_last_message_ts,thread_current_parent_ts,replies_next_cursor,thread_queue_ref,drive_csv_current_part,drive_jsonl_current_part,drive_csv_current_file_id,drive_jsonl_current_file_id,drive_last_renamed_at,lock_owner,lock_until,last_success_at,last_error_at,last_error_message,consecutive_failures,registered_at,registered_by,note
 ```
 
 ### 8.2 thread_queue
@@ -277,7 +276,6 @@ user_id,display_name,real_name,is_bot,is_deleted,updated_at
 | `sync_mode` | ENUM (`BACKFILL/LIVE`) |
 | `backfill_completed_at` | DATETIME(nullable) |
 | `history_oldest_ts` | STRING |
-| `history_latest_ts` | STRING(nullable) |
 | `history_next_cursor` | STRING(nullable) |
 | `history_inclusive` | BOOLEAN |
 | `live_last_message_ts` | STRING(nullable) |

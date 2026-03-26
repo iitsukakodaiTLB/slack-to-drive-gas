@@ -1,257 +1,226 @@
 # Slack ログ取得・Drive 保存（GAS）設計提案
 
-スタンドアロン GAS、スプレッドシート `slack_log_to_drive_setting`、Drive フォルダ `slack_log_to_drive` を前提とした、取得戦略・データ形式・ユーザーキャッシュの整理メモです。
+スタンドアロン GAS、スプレッドシート `slack_log_to_drive_setting`、Drive フォルダ `slack_log_to_drive` を前提にした、確定方針ベースの設計メモです。
 
 ---
 
-## 1. Slack API の効率的な取得方針
+## 1. 確定方針（今回反映）
 
-### 1.1 使用メソッド
-
-| 用途 | メソッド |
-|------|----------|
-| チャンネルの親メッセージ一覧 | `conversations.history` |
-| スレッド返信（親の `thread_ts` ごと） | `conversations.replies` |
-
-### 1.2 件数と期間の軸
-
-- **1 リクエストあたりは「件数（`limit`）＋カーソル」が主軸**とする。公式でも **100〜200 件/回**が推奨。`limit` の最大値は大きくても、常に満杯とは限らないため、**`response_metadata.next_cursor` で継続可否を判定**する。
-- **`oldest` / `latest`（Unix タイム文字列）**は次の用途で併用する。
-  - **初回・過去さかのぼり**: 取得カーソルと組み合わせ、重複・取りこぼしを抑える。
-  - **増分**: 前回まで取り終えた最新の `ts` を基準に「それより新しいだけ」を取得する（`inclusive` の扱いに注意。**保存側で `ts` による重複排除**を入れると安全）。
-
-### 1.3 GAS 実行時間との折り合い
-
-- **時間予算**（例: 4〜4.5 分で打ち切り）と **API 回数上限**（例: `history` + `replies` 合計 N 回/実行）の **二重ストッパー**を推奨。トリガー間隔が短くても安定しやすい。
-- **並列リクエストは避け、直列＋ HTTP 429 時は `Retry-After` 待機**が無難。`conversations.history` は Tier 3 相当のレート制限の対象。
-
-### 1.4 スレッド全件のコスト
-
-- 親メッセージで `reply_count > 0` のものだけ `conversations.replies` を呼ぶ。
-- スレッドが多いチャンネルでは **1 実行あたりの親メッセージ処理数に上限**を設け、残りは次回へ回す。
-- 再開しやすくするため、**「スレッド取得済みの最後の親 `ts`」など別カーソル**をスプレッドシートに持つ案がある。
-
-### 1.5 並び順
-
-- `conversations.history` は `oldest`〜`latest` の範囲内で **概ね古い順**（公式ドキュメントに従う）。「古い情報から新しい方向へ」という要件と整合しやすい。
-- 増分同期では境界の **`ts` と日時表示の対応**を最初に決め、必要なら **保存時にソート**して一貫させる。
-
-### 1.6 推奨バッチの目安
-
-- **`conversations.history`**: `limit` = **100〜200**。ページングは **`next_cursor` が空になるまで一気に**ではなく、**残り実行時間・残り API 枠**で打ち切り、次回再開。
-- **`conversations.replies`**: 親 1 件ずつ直列。スレッド過多チャンネルは **親のバッチ上限**を必須とする。
+- ログ本体は**シートに保存しない**。Drive に保存し更新する。
+- 1 チャンネルにつき `CSV` と `JSONL` を管理するが、NotebookLM の 1 ファイル制約を超える可能性を見越して**分割前提**とする。
+- ファイル名に**チャンネル名 + チャンネル ID**を含め、**チャンネル ID を正**として読み書き対象を特定する。
+- 分割ファイルは末尾に**2 桁連番**を付ける。
+- シート列は `ログ取得終了日時` を廃止し、**Slack API カーソル (`ts` / `next_cursor`) 中心**へ変更する。
+- `取得中` のまま落ちても、次回で**必ず途中再開**できる設計にする。
+- 優先度は要件どおり、`優先割り込み_at` 優先、同順位は `sort_last_run_at` または `live_last_message_at` の古い順。
+- チャンネル改名時は、該当チャンネル ID の**分割済み全 CSV/JSONL を一括リネーム**する。
 
 ---
 
-## 2. Drive 上のログファイル命名と役割分担
+## 2. Drive ファイル命名規則（分割前提）
 
-### 2.1 ファイル名
+### 2.1 推奨命名
 
-- **CSV**: `{チャンネル名}.csv`
-- **JSONL**: `{チャンネル名}.jsonl`
+- CSV: `{channel_name_sanitized}__{channel_id}__{part_no}.csv`
+- JSONL: `{channel_name_sanitized}__{channel_id}__{part_no}.jsonl`
+- `part_no`: `01`, `02`, `03` ...（2 桁固定）
 
-チャンネル名はファイル名と 1 対 1 で対応させる。**ログ本文にはチャンネル ID / チャンネル名を含めない**方針でよい（重複・トークン増を避け、ファイル名とシート行でコンテキストが決まる）。
+例:
 
-### 2.2 ファイル名まわりの注意（実装で必須のガード）
+- `general__C01234567__01.csv`
+- `general__C01234567__01.jsonl`
 
-- Slack のチャンネル名は **改名**される。改名後は **新ファイル名で別ファイル**になるか、**リネーム処理**を GAS で入れるかを決める（後述のシート列で **Drive ファイル ID を正**にすると安全）。
-- ファイル名に使えない文字（`/ \ : * ? " < > |` など）や、先頭末尾の空白は **サニタイズ**する。
-- 同名チャンネル（リネームの往復など）や衝突時は **`{チャンネル名}__{channel_id短縮}.csv`** のような **予備規則**を決めておくとよい。
-- シートには **常に `channel_id` を保持**し、表示用の **チャンネル名は最新取得で更新**する運用がよい。
+### 2.2 取り扱いルール
+
+- 認識キーは**`channel_id`**。`channel_name` は表示・命名用。
+- 同一 `channel_id` のファイル群を「同一チャンネルの全ログ」とみなす。
+- 最新 part は「最大 `part_no`」で判定。
+- チャンネル改名時は、同一 `channel_id` の全 part を新しい `channel_name_sanitized` でリネーム。
+- 禁止文字（`/ \ : * ? " < > |` 等）と前後空白はサニタイズ。
+
+### 2.3 分割ポリシー
+
+- 設定値 `MAX_BYTES_PER_FILE`（または `MAX_LINES_PER_FILE`）を超える見込みなら次 part を作成。
+- CSV / JSONL は**同じ part 番号**で揃える（`01` 同士、`02` 同士）。
+- シートには現在書き込み中の part 番号を持つ。
 
 ---
 
-## 3. CSV / JSONL の項目案（AI 利用想定・チャンネル列なし）
+## 3. CSV / JSONL 項目（チャンネル列なし）
 
-### 3.1 方針
-
-- **1 行（JSONL の 1 オブジェクト）= 1 メッセージ**（親・返信とも同一スキーマ）。
-- スレッドは `thread_ts` と `is_thread_reply`（または `parent_ts`）で表現すると、検索・要約・RAG に載せやすい。
-- **チャンネルはファイル名（とシート）に委ねる**ため、本文データから `channel_id` / `channel_name` は **省略可**。
-
-### 3.2 共通フィールド（CSV 列名と JSONL キーを揃える）
+チャンネル情報はファイル名とシート行で確定できるため、ログ本文の列から `channel_id` / `channel_name` は除外する。
 
 | 列 / キー | 説明 |
 |-----------|------|
-| `message_ts` | メッセージの `ts`（事実上の主キー） |
-| `thread_ts` | スレッドルートの `ts` |
-| `parent_ts` | 返信なら親の `ts`、トップレベルは空 |
-| `user_id` | 生 ID（再解決・監査用） |
-| `user_name` | 解決後の表示名 |
-| `bot_id` / `app_id` | ボット投稿時（任意） |
-| `datetime_utc` | `ts` から変換した ISO8601 |
-| `text` | 本文（必要なら `blocks` からのプレーン化は別列でも可） |
+| `message_ts` | メッセージ `ts`（主キー相当） |
+| `thread_ts` | スレッドルート `ts` |
+| `parent_ts` | 返信時の親 `ts` |
+| `user_id` | 投稿者 ID |
+| `user_name` | 解決後ユーザー名 |
+| `datetime_utc` | ISO8601 |
+| `text` | 本文 |
 | `message_type` | 例: `message` |
-| `subtype` | 例: `file_share`、通常は空 |
-| `permalink` | `chat.getPermalink` で取得できるなら有用 |
-| `reply_count` | 親メッセージに意味 |
-| `reaction_summary` | 例: `thumbsup:3\|heart:1` |
-| `has_files` | true / false |
-| `file_names` | 添付名の連結（個人情報に注意） |
-| `raw_json` | 任意。AI に渡すなら **省略または別ファイル**（トークン肥大化） |
+| `subtype` | 例: `file_share` |
+| `permalink` | 取得できる場合のみ |
+| `reply_count` | 親メッセージ向け |
+| `reaction_summary` | 例: `thumbsup:3|eyes:1` |
+| `has_files` | true/false |
+| `file_names` | 添付ファイル名連結 |
 
-### 3.3 CSV の実務
+補足:
 
-- 文字コード **UTF-8**。Excel で開く場合は **BOM 付き**を検討。
-- `text` 内の改行・ダブルクォートは **RFC 4180 相当でエスケープ**。
-
-### 3.4 JSONL
-
-- **1 行 1 JSON** でストリーミング・チャンク分割に適する。
-- **AI 向けメインは JSONL**、人間・表計算用に **CSV を別出力**する分担も可。
-
-### 3.5 スプレッドシートにログ全文を持たない
-
-セルに巨大な CSV/JSONL を格納しない。**Drive の `{チャンネル名}.csv` / `.jsonl` に追記**し、シートには **ファイル ID や最終書き込み状態**だけを載せる（次章の列案参照）。
+- JSONL は AI 用主形式、CSV は人間確認用の副形式にする。
+- 重複排除キーは最小で `message_ts`、より厳密には `message_ts + parent_ts` なども検討可。
 
 ---
 
-## 4. 「取得チャンネル情報」シート列案（改訂・API カーソル中心）
+## 4. 「取得チャンネル情報」シート列（全面改訂案）
 
-「ログ取得終了日時」だけでは **境界の再現性**（`inclusive`・同一 `ts` の複数メッセージ・ページ分割）で取りこぼしや重複が出やすい。**Slack API が返す・要求する値**（`ts` 文字列、`next_cursor`、フェーズ）をシートに持つことを推奨する。
+`ログ取得終了日時` は廃止し、再開可能性と重複防止を優先した列構成に変更する。
 
-列名は例。実装では `Config.js` で 1 列ずつ定数化する。
+### 4.1 列一覧（推奨）
 
-### 4.1 識別・表示・優先度
+| No | 列名 | 目的 |
+|----|------|------|
+| 1 | `status` | `PENDING / RUNNING / WAITING / ERROR / DISABLED` |
+| 2 | `channel_id` | 主キー（不変） |
+| 3 | `channel_name_current` | 最新チャンネル名（表示/命名用） |
+| 4 | `priority_interrupt_at` | 優先割り込み日時 |
+| 5 | `sort_last_run_at` | 最終試行時刻（優先度ソート用） |
+| 6 | `live_last_message_at` | 最終成功取り込み時刻（可読） |
+| 7 | `sync_mode` | `BACKFILL` or `LIVE` |
+| 8 | `backfill_completed_at` | バックフィル完了時刻（未完は空） |
+| 9 | `history_oldest_ts` | `conversations.history` の次回 `oldest`（排他） |
+| 10 | `history_latest_ts` | 必要時のみ上限 `latest` |
+| 11 | `history_next_cursor` | `conversations.history` ページ継続用 |
+| 12 | `history_inclusive` | API パラメータの固定値メモ |
+| 13 | `live_last_message_ts` | 増分同期の境界 `ts`（排他） |
+| 14 | `thread_current_parent_ts` | `replies` 処理中の親 `ts` |
+| 15 | `replies_next_cursor` | `conversations.replies` ページ継続用 |
+| 16 | `thread_queue_ref` | スレッドキュー参照キー（別シート推奨） |
+| 17 | `drive_csv_current_part` | 現在書き込み先の CSV part（`01` 等） |
+| 18 | `drive_jsonl_current_part` | 現在書き込み先の JSONL part |
+| 19 | `drive_csv_current_file_id` | 現在 part の CSV fileId |
+| 20 | `drive_jsonl_current_file_id` | 現在 part の JSONL fileId |
+| 21 | `drive_last_renamed_at` | 改名対応を最後に実施した時刻 |
+| 22 | `lock_owner` | 実行 UUID（リース所有者） |
+| 23 | `lock_until` | リース期限 |
+| 24 | `last_success_at` | 最終成功時刻 |
+| 25 | `last_error_at` | 最終失敗時刻 |
+| 26 | `last_error_message` | エラー要約 |
+| 27 | `consecutive_failures` | 連続失敗回数 |
+| 28 | `registered_at` | 登録日時 |
+| 29 | `registered_by` | 登録者 |
+| 30 | `note` | 備考 |
 
-| 列（例） | 型・内容 |
-|----------|----------|
-| `取得ステータス` | プルダウン: 未処理 / 取得中 / 待機中 / 失敗 など（運用で定義） |
-| `channel_id` | 不変の主キー（Slack のチャンネル ID） |
-| `channel_name` | 表示・ファイル名用。`conversations.info` 等で更新可 |
-| `登録日` | リスト登録日 |
-| `登録者` | テキスト |
-| `優先割り込み_at` | 優先したいときの日時。並び順のキー |
-| `sort_last_run_at` | **最終実行（試行）日時**。優先度「最終取得が古い順」用。`last_success_at` と分けるとデバッグしやすい |
+### 4.2 追加シート（推奨）
 
-### 4.2 同期モード（過去さかのぼりと増分の切り替え）
+#### `thread_queue` シート
 
-| 列（例） | 内容 |
-|----------|------|
-| `sync_mode` | `BACKFILL`（未消化の過去がある） / `LIVE`（頭まで追いつき、増分のみ） など。実装の分岐を明示 |
-| `backfill_complete` | TRUE なら過去方向のバックフィル完了（要件の「全件取得完了」に相当） |
+`conversations.replies` を確実再開するため、親スレッドを別管理する。
 
-### 4.3 `conversations.history` 用（親メッセージ）
-
-| 列（例） | 内容 |
-|----------|------|
-| `history_oldest_ts` | 次回 `oldest` に渡す **Slack の `ts` 文字列**（含めるかは実装で固定。推奨: **排他的**にし、保存済み最大 `message_ts` を記録） |
-| `history_latest_ts` | 必要ならウィンドウ上端。通常は空で「現在まで」 |
-| `history_next_cursor` | 同一 `oldest`/`latest` ウィンドウ内でページ継続するときの **`next_cursor`**。空ならカーソルページなし |
-| `history_inclusive` | TRUE/FALSE。API の `inclusive` と一致させメモしておくと再開時に迷わない |
-
-**人間可読日時**（`ログ取得開始日時` / `ログ取得終了日時`）は、**表示・監査用**に残してよいが、**再開の正は上記 `*_ts` と `history_next_cursor`** とする。
-
-### 4.4 増分（ライブ）用の「いつまで取ったか」
-
-バックフィル完了後は、親メッセージは **`oldest` = 直近まで取り込んだ最大 `message_ts`（排他）** のパターンが扱いやすい。
-
-| 列（例） | 内容 |
-|----------|------|
-| `live_last_message_ts` | 増分で「ここまで取り終えた」**最大 `message_ts`**（文字列）。次回はこれを `oldest` に（排他ルールをコードで固定） |
-| `live_last_message_at` | 上記の人間可読版（任意） |
-
-`ログ取得完了日時` を「全件バックフィル完了時刻」にしたい場合は、`backfill_complete` が TRUE になったタイミングでセット。
-
-### 4.5 スレッド（`conversations.replies`）用カーソル
-
-親一覧と独立して持つと再開が安全。
-
-| 列（例） | 内容 |
-|----------|------|
-| `thread_parent_ts_queue` | 未処理の親 `thread_ts` を JSON 配列や区切り文字で保持（長くなりうるので **別シート「スレッドキュー」に逃がす**案もあり） |
-| `thread_current_parent_ts` | 今まさに処理中の親 |
-| `replies_next_cursor` | その親に対する `conversations.replies` の **`next_cursor`** |
-| `thread_backlog_done_until_ts` | 任意。「この親 `ts` までスレッド取得済み」など線形化したい場合 |
-
-スレッドが極端に多いチャンネルは **キューを別テーブル（別シート）**にし、行 ID でチャンネルと紐づけるとシートが読みやすい。
-
-### 4.6 Drive ファイル（CSV / JSONL）のポインタ
-
-| 列（例） | 内容 |
-|----------|------|
-| `drive_csv_file_id` | `{チャンネル名}.csv` のファイル ID（**リネームされても追跡可能**） |
-| `drive_jsonl_file_id` | `{チャンネル名}.jsonl` のファイル ID |
-| `drive_folder_id` | 省略可（全体で 1 フォルダなら `Config` のみ） |
-| `last_append_ok_at` | 最終の正常追記完了時刻（任意） |
-
-シートから **セル内 CSV/JSONL 列は削除**し、Drive を正とする。
-
-### 4.7 実行ロック・エラー・観測性（改善推奨）
-
-トリガーが重なると同じ行を二重処理しうる。
-
-| 列（例） | 内容 |
-|----------|------|
-| `lock_owner` | 実行 ID や `Session.getActiveUser` ではなく **UUID（その実行で生成）** など |
-| `lock_until` | 時刻。超過したら他実行が奪取可（**リース**） |
-| `last_error_message` | 失敗時の短いメッセージ |
-| `last_error_at` | 失敗時刻 |
-| `consecutive_failures` | 連続失敗回数（しきい値で通知止め等） |
-| `api_calls_this_run` | 任意。直近実行の API 回数メモでチューニングに使う |
-
-### 4.8 削除・整理したほうがよい・変えたほうがよい点（まとめ）
-
-- **セル内のログ CSV/JSONL**: 削除し、**Drive ファイル ID** に一本化。
-- **「ログ取得終了日時」単独**: 再開の正にしない。**`live_last_message_ts` + `history_next_cursor` + `replies_next_cursor`** を組み合わせる。
-- **`取得中` のまま落ちる**: `lock_until` + タイムアウトでの解放、または **失敗**へ遷移して `last_error_*` を埋める。
-- **優先度**: `優先割り込み_at` が入っている行を先に、同順位は `sort_last_run_at` または `live_last_message_at` の古い順（要件どおり）。
-- **チャンネル改名**: `drive_*_file_id` があれば中身は同じファイルをリネームするだけにできる。
+| 列名 | 内容 |
+|------|------|
+| `queue_id` | 一意 ID |
+| `channel_id` | 対象チャンネル |
+| `parent_thread_ts` | 親 `thread_ts` |
+| `status` | `PENDING / RUNNING / DONE / ERROR` |
+| `replies_next_cursor` | ページ再開カーソル |
+| `last_reply_ts_processed` | 重複防止用 |
+| `updated_at` | 更新日時 |
 
 ---
 
-## 5. ユーザー ID ↔ 名前の対応表シート
+## 5. 取得中で落ちた場合の再開・重複/抜け漏れ対策
 
-### 5.1 用意することを推奨する理由
+### 5.1 ロック（リース）方式
 
-- メッセージごとに `users.info` を呼ぶとレートと実行時間を消費しやすい。
-- 退職・改名後も **取得時点の表示**を残したい場合、シートにスナップショットを蓄積する意味がある。
+- 実行開始時に `lock_owner` と `lock_until` を設定し `status=RUNNING`。
+- 次回実行時、`status=RUNNING` でも `lock_until` が過去なら**引き継いで再開**。
+- 正常終了時は `lock_owner` / `lock_until` をクリアして `status=WAITING`。
+- 異常終了時は `status=ERROR` か `WAITING` に戻しつつカーソルは保持（要件優先なら `WAITING` 推奨）。
 
-### 5.2 シート案（例: `slack_user_cache`）
+### 5.2 再開ポイントを API 値で保持
 
-| 列 | 内容 |
-|----|------|
+- 親メッセージ: `history_oldest_ts` + `history_next_cursor`
+- スレッド返信: `thread_current_parent_ts` + `replies_next_cursor`
+- これにより、途中中断しても**同じ API ページの続きから再開**できる。
+
+### 5.3 重複防止
+
+- 保存前に `message_ts` 重複チェック（同一ファイル末尾付近 + 必要ならインデックス）。
+- 境界は `oldest` 排他で運用し、同一 `ts` のリスクは最終重複チェックで吸収。
+- 書き込み単位は「1 API レスポンス分をメモリで整形 -> まとめて追記」。失敗時はカーソル更新順序を固定（**先に書き込み成功、後でカーソル更新**）。
+
+### 5.4 抜け漏れ防止
+
+- `history_next_cursor` がある間は同じ `oldest/latest` 条件でページ継続。
+- スレッドは `reply_count > 0` の親を必ず `thread_queue` へ登録。
+- `thread_queue` が空で、かつ `history` 側が最新到達ならその実行分完了。
+
+---
+
+## 6. トリガー頻度・1回処理フロー・対象行選定ルール
+
+### 6.1 トリガー頻度（推奨）
+
+- 基本: **5 分ごと**（時間主導トリガー）
+- backlog が多い期間: **3 分ごと**へ一時短縮（レートに余裕がある場合）
+- 1 回の実行時間予算: **最大 4.5 分**（安全停止）
+
+### 6.2 1 回分の処理フロー
+
+1. 対象行を 1 件選定（次節の優先ルール）
+2. 行ロック取得（`lock_owner`, `lock_until`, `status=RUNNING`）
+3. チャンネル名を最新化し、必要なら同一 `channel_id` の全ログファイルをリネーム
+4. `history` を取得（`history_next_cursor` 優先、なければ `history_oldest_ts` から）
+5. 取得メッセージを整形し CSV/JSONL に追記（必要なら part を繰り上げ）
+6. `reply_count > 0` を `thread_queue` に投入
+7. `thread_queue` を予算内で処理（`replies_next_cursor` で再開）
+8. 成功した分のカーソル (`*_ts`, `*_next_cursor`) と時刻 (`sort_last_run_at`, `last_success_at`, `live_last_message_at`) を更新
+9. ロック解放して `status=WAITING`（または運用上の待機状態）
+10. エラー時は `last_error_*`, `consecutive_failures` 更新し、次回再開可能なカーソルは維持
+
+### 6.3 対象行選定（優先順位）
+
+実行時に `status != DISABLED` の行から以下で 1 件選ぶ。
+
+1. `priority_interrupt_at` が入っている行を最優先（昇順）
+2. 同順位は `sort_last_run_at` 昇順（古い順）
+3. `sort_last_run_at` が同値/空なら `live_last_message_at` 昇順（古い順）
+4. さらに同値なら `registered_at` 昇順
+
+補足:
+
+- `RUNNING` 行でも `lock_until` 期限切れなら選定対象に戻す。
+- `ERROR` は通常対象に含める（自動復旧重視）。恒久停止したい場合のみ `DISABLED`。
+
+---
+
+## 7. ユーザー ID ↔ 名前キャッシュ（推奨）
+
+`users.info` の呼び過ぎを防ぐため、`slack_user_cache` シートを持つ。
+
+| 列名 | 内容 |
+|------|------|
 | `user_id` | 主キー |
 | `display_name` | 表示名 |
-| `real_name` | 本名フィールド |
-| `is_bot` | TRUE / FALSE |
-| `is_deleted` | 削除済みユーザー |
-| `updated_at` | キャッシュ更新日時 |
-| `raw_profile_json` | 任意。最小限にし肥大化に注意 |
+| `real_name` | 本名 |
+| `is_bot` | bot 判定 |
+| `is_deleted` | 無効ユーザー |
+| `updated_at` | 更新日時 |
 
-### 5.3 運用イメージ
-
-- メッセージに出現した `user_id` をキャッシュで引き、無ければ **`users.info` で取得してシート更新**（1 実行で ID が大量に増えた場合はキューに回す）。
-- 定期的に古い行を再取得すると改名に追従しやすい。
-- 表示ルール例: `display_name` → 空なら `real_name` → 空なら `user_id`。
+メッセージ整形時は `display_name -> real_name -> user_id` の順で採用。
 
 ---
 
-## 6. 補足メモ
+## 8. 実装時チェックリスト
 
-- 再開用カーソルの詳細は **§4**。Slack の `ts` は **小数点付き文字列**。比較・最大値更新は **文字列比較に頼らず、整数部・小数部を数値として比較するヘルパー**を GAS に用意すると安全。
-- 人間可読日時は **表示・監査用**。API 再開の正は **`*_ts` 文字列と `next_cursor`**。
-
----
-
-## 7. 取得ステータスと実装のすり合わせ
-
-プルダウンが **未処理 / 取得中 / 失敗 / 待機中** などであれば、**状態遷移**を一文書にまとめておくと、トリガー多重実行時も扱いやすい。
-
-例（概念）:
-
-- 処理開始: 対象行を **取得中** にし、他実行が同じ行を取らないようにする。
-- 正常終了: **待機中** または **未処理** へ（運用方針に合わせる）。
-- 異常終了: **失敗**。次回リトライ方針を決める。
-
----
-
-## 8. 実装時に固めるとよい事項（チェックリスト）
-
-- `Config.js`: シート名・列番号・時間予算・`limit` などの定数。
-- スクリプトプロパティ: Bot Token、スプレッドシート ID、Drive フォルダ ID などのキー名。
-- Drive 側: **単一ファイル追記**か **日付ローテーション**か。
-- シート列と **スクリプトの列インデックス**の対応表。
+- `Config.js` に列名/列番号・`limit`・時間予算・ファイル分割閾値を定義
+- Script Properties に Slack Token / Spreadsheet ID / Drive Folder ID を定義
+- `ts` 比較ヘルパーを実装（小数点付き文字列を安全比較）
+- カーソル更新順序を固定（書き込み成功後にカーソル更新）
+- 改名時の全 part リネーム処理を実装（`channel_id` 一致で抽出）
 
 ---
 
@@ -260,5 +229,3 @@
 - [conversations.history](https://api.slack.com/methods/conversations.history)
 - [conversations.replies](https://api.slack.com/methods/conversations.replies)
 - [Pagination](https://api.slack.com/docs/pagination)
-
-（レートティアや `limit` の推奨値は API 改版で変わる可能性があるため、実装前に最新ドキュメントを確認すること。）

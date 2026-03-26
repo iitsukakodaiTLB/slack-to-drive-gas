@@ -50,22 +50,24 @@
 
 チャンネル情報はファイル名とシート行で確定できるため、ログ本文の列から `channel_id` / `channel_name` は除外する。
 
-| 列 / キー | 説明 |
-|-----------|------|
-| `message_ts` | メッセージ `ts`（主キー相当） |
-| `thread_ts` | スレッドルート `ts` |
-| `parent_ts` | 返信時の親 `ts` |
-| `user_id` | 投稿者 ID |
-| `user_name` | 解決後ユーザー名 |
-| `datetime_utc` | ISO8601 |
-| `text` | 本文 |
-| `message_type` | 例: `message` |
-| `subtype` | 例: `file_share` |
-| `permalink` | 取得できる場合のみ |
-| `reply_count` | 親メッセージ向け |
-| `reaction_summary` | 例: `thumbsup:3|eyes:1` |
-| `has_files` | true/false |
-| `file_names` | 添付ファイル名連結 |
+
+| 列 / キー             | 説明                |
+| ------------------ | ----------------- |
+| `message_ts`       | メッセージ `ts`（主キー相当） |
+| `thread_ts`        | スレッドルート `ts`      |
+| `parent_ts`        | 返信時の親 `ts`        |
+| `user_id`          | 投稿者 ID            |
+| `user_name`        | 解決後ユーザー名          |
+| `datetime_utc`     | ISO8601           |
+| `text`             | 本文                |
+| `message_type`     | 例: `message`      |
+| `subtype`          | 例: `file_share`   |
+| `permalink`        | 取得できる場合のみ         |
+| `reply_count`      | 親メッセージ向け          |
+| `reaction_summary` | 例: `thumbsup:3    |
+| `has_files`        | true/false        |
+| `file_names`       | 添付ファイル名連結         |
+
 
 補足:
 
@@ -74,44 +76,46 @@
 
 ---
 
-## 4. 「取得チャンネル情報」シート列（全面改訂案）
+## 4. `channel_sync_state` シート列（全面改訂案）
 
 `ログ取得終了日時` は廃止し、再開可能性と重複防止を優先した列構成に変更する。
 
 ### 4.1 列一覧（推奨）
 
-| No | 列名 | 目的 |
-|----|------|------|
-| 1 | `status` | `PENDING / RUNNING / WAITING / ERROR / DISABLED` |
-| 2 | `channel_id` | 主キー（不変） |
-| 3 | `channel_name_current` | 最新チャンネル名（表示/命名用） |
-| 4 | `priority_interrupt_at` | 優先割り込み日時 |
-| 5 | `sort_last_run_at` | 最終試行時刻（優先度ソート用） |
-| 6 | `live_last_message_at` | 最終成功取り込み時刻（可読） |
-| 7 | `sync_mode` | `BACKFILL` or `LIVE` |
-| 8 | `backfill_completed_at` | バックフィル完了時刻（未完は空） |
-| 9 | `history_oldest_ts` | `conversations.history` の次回 `oldest`（排他） |
-| 10 | `history_latest_ts` | 必要時のみ上限 `latest` |
-| 11 | `history_next_cursor` | `conversations.history` ページ継続用 |
-| 12 | `history_inclusive` | API パラメータの固定値メモ |
-| 13 | `live_last_message_ts` | 増分同期の境界 `ts`（排他） |
-| 14 | `thread_current_parent_ts` | `replies` 処理中の親 `ts` |
-| 15 | `replies_next_cursor` | `conversations.replies` ページ継続用 |
-| 16 | `thread_queue_ref` | スレッドキュー参照キー（別シート推奨） |
-| 17 | `drive_csv_current_part` | 現在書き込み先の CSV part（`01` 等） |
-| 18 | `drive_jsonl_current_part` | 現在書き込み先の JSONL part |
-| 19 | `drive_csv_current_file_id` | 現在 part の CSV fileId |
-| 20 | `drive_jsonl_current_file_id` | 現在 part の JSONL fileId |
-| 21 | `drive_last_renamed_at` | 改名対応を最後に実施した時刻 |
-| 22 | `lock_owner` | 実行 UUID（リース所有者） |
-| 23 | `lock_until` | リース期限 |
-| 24 | `last_success_at` | 最終成功時刻 |
-| 25 | `last_error_at` | 最終失敗時刻 |
-| 26 | `last_error_message` | エラー要約 |
-| 27 | `consecutive_failures` | 連続失敗回数 |
-| 28 | `registered_at` | 登録日時 |
-| 29 | `registered_by` | 登録者 |
-| 30 | `note` | 備考 |
+
+| No  | 列名                            | 目的                                               |
+| --- | ----------------------------- | ------------------------------------------------ |
+| 1   | `status`                      | `PENDING / RUNNING / WAITING / ERROR / DISABLED` |
+| 2   | `channel_id`                  | 主キー（不変）                                          |
+| 3   | `channel_name_current`        | 最新チャンネル名（表示/命名用）                                 |
+| 4   | `priority_interrupt_at`       | 優先割り込み日時                                         |
+| 5   | `sort_last_run_at`            | 最終試行時刻（優先度ソート用）                                  |
+| 6   | `live_last_message_at`        | 最終成功取り込み時刻（可読）                                   |
+| 7   | `sync_mode`                   | `BACKFILL` or `LIVE`                             |
+| 8   | `backfill_completed_at`       | バックフィル完了時刻（未完は空）                                 |
+| 9   | `history_oldest_ts`           | `conversations.history` の次回 `oldest`（排他）         |
+| 10  | `history_latest_ts`           | 必要時のみ上限 `latest`                                 |
+| 11  | `history_next_cursor`         | `conversations.history` ページ継続用                   |
+| 12  | `history_inclusive`           | API パラメータの固定値メモ                                  |
+| 13  | `live_last_message_ts`        | 増分同期の境界 `ts`（排他）                                 |
+| 14  | `thread_current_parent_ts`    | `replies` 処理中の親 `ts`                             |
+| 15  | `replies_next_cursor`         | `conversations.replies` ページ継続用                   |
+| 16  | `thread_queue_ref`            | スレッドキュー参照キー（別シート推奨）                              |
+| 17  | `drive_csv_current_part`      | 現在書き込み先の CSV part（`01` 等）                        |
+| 18  | `drive_jsonl_current_part`    | 現在書き込み先の JSONL part                              |
+| 19  | `drive_csv_current_file_id`   | 現在 part の CSV fileId                             |
+| 20  | `drive_jsonl_current_file_id` | 現在 part の JSONL fileId                           |
+| 21  | `drive_last_renamed_at`       | 改名対応を最後に実施した時刻                                   |
+| 22  | `lock_owner`                  | 実行 UUID（リース所有者）                                  |
+| 23  | `lock_until`                  | リース期限                                            |
+| 24  | `last_success_at`             | 最終成功時刻                                           |
+| 25  | `last_error_at`               | 最終失敗時刻                                           |
+| 26  | `last_error_message`          | エラー要約                                            |
+| 27  | `consecutive_failures`        | 連続失敗回数                                           |
+| 28  | `registered_at`               | 登録日時                                             |
+| 29  | `registered_by`               | 登録者                                              |
+| 30  | `note`                        | 備考                                               |
+
 
 ### 4.2 追加シート（推奨）
 
@@ -119,15 +123,27 @@
 
 `conversations.replies` を確実再開するため、親スレッドを別管理する。
 
-| 列名 | 内容 |
-|------|------|
-| `queue_id` | 一意 ID |
-| `channel_id` | 対象チャンネル |
-| `parent_thread_ts` | 親 `thread_ts` |
-| `status` | `PENDING / RUNNING / DONE / ERROR` |
-| `replies_next_cursor` | ページ再開カーソル |
-| `last_reply_ts_processed` | 重複防止用 |
-| `updated_at` | 更新日時 |
+
+| 列名                        | 内容                                 |
+| ------------------------- | ---------------------------------- |
+| `queue_id`                | 一意 ID                              |
+| `channel_id`              | 対象チャンネル                            |
+| `parent_thread_ts`        | 親 `thread_ts`                      |
+| `status`                  | `PENDING / RUNNING / DONE / ERROR` |
+| `replies_next_cursor`     | ページ再開カーソル                          |
+| `last_reply_ts_processed` | 重複防止用                              |
+| `updated_at`              | 更新日時                               |
+
+### 4.3 `thread_queue` の運用ルール（中断再開）
+
+認識はその通りで、以下の挙動を推奨する。
+
+- スレッド返信が必要な親メッセージ（`reply_count > 0`）を見つけたら、`thread_queue` に `PENDING` で追加する。
+- 実行中は対象行を `RUNNING` にし、`replies_next_cursor` を更新しながら進める。
+- 1 つの親スレッドの読み込みが完了したら、その行は削除ではなく `DONE` に更新する（監査不要なら物理削除でも可）。
+- 実行が中断した場合は `RUNNING` のまま残るため、次回実行で `lock_until` 期限切れ行を回収して再開する。
+- 次回、同じチャンネルを処理するときは `thread_queue` で `channel_id` 一致かつ `PENDING/RUNNING` の行を優先して処理する。
+
 
 ---
 
@@ -179,7 +195,7 @@
 7. `thread_queue` を予算内で処理（`replies_next_cursor` で再開）
 8. 成功した分のカーソル (`*_ts`, `*_next_cursor`) と時刻 (`sort_last_run_at`, `last_success_at`, `live_last_message_at`) を更新
 9. ロック解放して `status=WAITING`（または運用上の待機状態）
-10. エラー時は `last_error_*`, `consecutive_failures` 更新し、次回再開可能なカーソルは維持
+10. エラー時は `last_error_`*, `consecutive_failures` 更新し、次回再開可能なカーソルは維持
 
 ### 6.3 対象行選定（優先順位）
 
@@ -201,20 +217,116 @@
 
 `users.info` の呼び過ぎを防ぐため、`slack_user_cache` シートを持つ。
 
-| 列名 | 内容 |
-|------|------|
-| `user_id` | 主キー |
-| `display_name` | 表示名 |
-| `real_name` | 本名 |
-| `is_bot` | bot 判定 |
-| `is_deleted` | 無効ユーザー |
-| `updated_at` | 更新日時 |
+
+| 列名             | 内容     |
+| -------------- | ------ |
+| `user_id`      | 主キー    |
+| `display_name` | 表示名    |
+| `real_name`    | 本名     |
+| `is_bot`       | bot 判定 |
+| `is_deleted`   | 無効ユーザー |
+| `updated_at`   | 更新日時   |
+
 
 メッセージ整形時は `display_name -> real_name -> user_id` の順で採用。
 
 ---
 
-## 8. 実装時チェックリスト
+## 8. シート作成用ヘッダー（コピペ用）
+
+### 8.1 channel_sync_state
+
+```csv
+status,channel_id,channel_name_current,priority_interrupt_at,sort_last_run_at,live_last_message_at,sync_mode,backfill_completed_at,history_oldest_ts,history_latest_ts,history_next_cursor,history_inclusive,live_last_message_ts,thread_current_parent_ts,replies_next_cursor,thread_queue_ref,drive_csv_current_part,drive_jsonl_current_part,drive_csv_current_file_id,drive_jsonl_current_file_id,drive_last_renamed_at,lock_owner,lock_until,last_success_at,last_error_at,last_error_message,consecutive_failures,registered_at,registered_by,note
+```
+
+### 8.2 thread_queue
+
+```csv
+queue_id,channel_id,parent_thread_ts,status,replies_next_cursor,last_reply_ts_processed,lock_owner,lock_until,last_error_at,last_error_message,retry_count,updated_at,created_at
+```
+
+### 8.3 slack_user_cache
+
+```csv
+user_id,display_name,real_name,is_bot,is_deleted,updated_at
+```
+
+---
+
+## 9. テーブル化の是非と列型
+
+本構成では、Google スプレッドシートのテーブル機能は**使用しない**。各シートの 1 行目をヘッダー行として固定し、GAS は `getDataRange()` / `getValues()` で処理する。
+
+実装側では、読み込み開始時にヘッダー名一致チェックを必ず行う。
+
+### 9.1 channel_sync_state の列型（推奨）
+
+| 列名 | 型 |
+|------|----|
+| `status` | ENUM (`PENDING/RUNNING/WAITING/ERROR/DISABLED`) |
+| `channel_id` | STRING |
+| `channel_name_current` | STRING |
+| `priority_interrupt_at` | DATETIME(nullable) |
+| `sort_last_run_at` | DATETIME(nullable) |
+| `live_last_message_at` | DATETIME(nullable) |
+| `sync_mode` | ENUM (`BACKFILL/LIVE`) |
+| `backfill_completed_at` | DATETIME(nullable) |
+| `history_oldest_ts` | STRING |
+| `history_latest_ts` | STRING(nullable) |
+| `history_next_cursor` | STRING(nullable) |
+| `history_inclusive` | BOOLEAN |
+| `live_last_message_ts` | STRING(nullable) |
+| `thread_current_parent_ts` | STRING(nullable) |
+| `replies_next_cursor` | STRING(nullable) |
+| `thread_queue_ref` | STRING(nullable) |
+| `drive_csv_current_part` | STRING(2桁) |
+| `drive_jsonl_current_part` | STRING(2桁) |
+| `drive_csv_current_file_id` | STRING(nullable) |
+| `drive_jsonl_current_file_id` | STRING(nullable) |
+| `drive_last_renamed_at` | DATETIME(nullable) |
+| `lock_owner` | STRING(nullable) |
+| `lock_until` | DATETIME(nullable) |
+| `last_success_at` | DATETIME(nullable) |
+| `last_error_at` | DATETIME(nullable) |
+| `last_error_message` | STRING(nullable) |
+| `consecutive_failures` | NUMBER(integer) |
+| `registered_at` | DATETIME |
+| `registered_by` | STRING |
+| `note` | STRING(nullable) |
+
+### 9.2 thread_queue の列型（推奨）
+
+| 列名 | 型 |
+|------|----|
+| `queue_id` | STRING(UUID推奨) |
+| `channel_id` | STRING |
+| `parent_thread_ts` | STRING |
+| `status` | ENUM (`PENDING/RUNNING/DONE/ERROR`) |
+| `replies_next_cursor` | STRING(nullable) |
+| `last_reply_ts_processed` | STRING(nullable) |
+| `lock_owner` | STRING(nullable) |
+| `lock_until` | DATETIME(nullable) |
+| `last_error_at` | DATETIME(nullable) |
+| `last_error_message` | STRING(nullable) |
+| `retry_count` | NUMBER(integer) |
+| `updated_at` | DATETIME |
+| `created_at` | DATETIME |
+
+### 9.3 slack_user_cache の列型（推奨）
+
+| 列名 | 型 |
+|------|----|
+| `user_id` | STRING |
+| `display_name` | STRING(nullable) |
+| `real_name` | STRING(nullable) |
+| `is_bot` | BOOLEAN |
+| `is_deleted` | BOOLEAN |
+| `updated_at` | DATETIME |
+
+---
+
+## 10. 実装時チェックリスト
 
 - `Config.js` に列名/列番号・`limit`・時間予算・ファイル分割閾値を定義
 - Script Properties に Slack Token / Spreadsheet ID / Drive Folder ID を定義
@@ -224,8 +336,9 @@
 
 ---
 
-## 参考リンク（公式）
+## 11. 参考リンク（公式）
 
 - [conversations.history](https://api.slack.com/methods/conversations.history)
 - [conversations.replies](https://api.slack.com/methods/conversations.replies)
 - [Pagination](https://api.slack.com/docs/pagination)
+

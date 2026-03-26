@@ -14,6 +14,9 @@
 - `取得中` のまま落ちても、次回で**必ず途中再開**できる設計にする。
 - 優先度は要件どおり、`優先割り込み_at` 優先、同順位は `sort_last_run_at` または `live_last_message_at` の古い順。
 - チャンネル改名時は、該当チャンネル ID の**分割済み全 CSV/JSONL を一括リネーム**する。
+- `thread_queue` の `DONE` は同一シートで管理し、保持期限（90日）超過分を定期削除する。
+- 保存項目はスリム化しつつ、`user_name` と `reaction_summary` は保持する。
+- API コスト抑制のため、`chat.getPermalink` は呼ばない。`users.info` は未キャッシュ `user_id` のみ呼ぶ。
 
 ---
 
@@ -60,19 +63,18 @@
 | `user_name`        | 解決後ユーザー名          |
 | `datetime_utc`     | ISO8601           |
 | `text`             | 本文                |
-| `message_type`     | 例: `message`      |
 | `subtype`          | 例: `file_share`   |
-| `permalink`        | 取得できる場合のみ         |
-| `reply_count`      | 親メッセージ向け          |
-| `reaction_summary` | 例: `thumbsup:3    |
+| `reaction_summary` | 例: `thumbsup:3\|eyes:1` |
 | `has_files`        | true/false        |
-| `file_names`       | 添付ファイル名連結         |
 
 
 補足:
 
 - JSONL は AI 用主形式、CSV は人間確認用の副形式にする。
 - 重複排除キーは最小で `message_ts`、より厳密には `message_ts + parent_ts` なども検討可。
+- `reaction_summary` は `conversations.history` / `conversations.replies` の `reactions` 情報のみで生成する（追加 API 呼び出しなし）。
+- `user_name` は `slack_user_cache` を優先し、未キャッシュの場合のみ `users.info` で取得してキャッシュ更新する。
+- `permalink` は保存しない（API コスト抑制）。
 
 ---
 
@@ -143,6 +145,7 @@
 - 1 つの親スレッドの読み込みが完了したら、その行は削除ではなく `DONE` に更新する（監査不要なら物理削除でも可）。
 - 実行が中断した場合は `RUNNING` のまま残るため、次回実行で `lock_until` 期限切れ行を回収して再開する。
 - 次回、同じチャンネルを処理するときは `thread_queue` で `channel_id` 一致かつ `PENDING/RUNNING` の行を優先して処理する。
+- `DONE` 行は同一シートで保持し、`updated_at` 基準で 90 日超を定期削除する（別アーカイブシートは必須ではない）。
 
 
 ---
@@ -195,7 +198,8 @@
 7. `thread_queue` を予算内で処理（`replies_next_cursor` で再開）
 8. 成功した分のカーソル (`*_ts`, `*_next_cursor`) と時刻 (`sort_last_run_at`, `last_success_at`, `live_last_message_at`) を更新
 9. ロック解放して `status=WAITING`（または運用上の待機状態）
-10. エラー時は `last_error_`*, `consecutive_failures` 更新し、次回再開可能なカーソルは維持
+10. エラー時は `last_error_*`, `consecutive_failures` 更新し、次回再開可能なカーソルは維持
+11. 実行終盤で `thread_queue` の `DONE` かつ期限超過（90日）を削除
 
 ### 6.3 対象行選定（優先順位）
 

@@ -11,8 +11,8 @@ function runSlackLogSync() {
   validateAllSheetSchemas_(ss);
   const channelSheet = ss.getSheetByName(CONFIG.SPREADSHEET.SHEETS.CHANNEL_SYNC_STATE);
 
-  const docLock = LockService.getDocumentLock();
-  docLock.waitLock(30000);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
   let target = null;
   let runId = null;
   try {
@@ -25,7 +25,7 @@ function runSlackLogSync() {
     runId = Utilities.getUuid();
     acquireLeaseForRow_(channelSheet, target.rowIndex, runId, new Date());
   } finally {
-    docLock.releaseLock();
+    lock.releaseLock();
   }
 
   if (!target || !runId) {
@@ -406,17 +406,31 @@ function markRowFailure_(sheet, rowIndex, error) {
   const c = COLS.CHANNEL_SYNC_STATE;
   const now = new Date();
   const currentFailures = Number(sheet.getRange(rowIndex, c.CONSECUTIVE_FAILURES).getValue() || 0);
+  const errorText = String(error);
+  const permanent = isPermanentChannelError_(errorText);
   const nextFailures = currentFailures + 1;
-  const shouldDisable = nextFailures >= CONFIG.EXECUTION.MAX_CHANNEL_CONSECUTIVE_FAILURES;
+  const shouldDisable = permanent || nextFailures >= CONFIG.EXECUTION.MAX_CHANNEL_CONSECUTIVE_FAILURES;
 
   sheet.getRange(rowIndex, c.STATUS).setValue(shouldDisable ? STATUS.DISABLED : STATUS.ERROR);
   sheet.getRange(rowIndex, c.LAST_ERROR_AT).setValue(now);
-  const baseMessage = truncateForCell_(String(error), 3800);
-  const finalMessage = shouldDisable
+  const baseMessage = truncateForCell_(errorText, 3800);
+  const finalMessage = permanent
+    ? "[permanent_channel_error] " + baseMessage
+    : shouldDisable
     ? "[channel_disabled_after_consecutive_failures] " + baseMessage
     : baseMessage;
   sheet.getRange(rowIndex, c.LAST_ERROR_MESSAGE).setValue(truncateForCell_(finalMessage, 4000));
   sheet.getRange(rowIndex, c.CONSECUTIVE_FAILURES).setValue(nextFailures);
+}
+
+function isPermanentChannelError_(errorText) {
+  const text = String(errorText || "");
+  return (
+    text.indexOf("not_in_channel") !== -1 ||
+    text.indexOf("channel_not_found") !== -1 ||
+    text.indexOf("is_archived") !== -1 ||
+    text.indexOf("missing_scope") !== -1
+  );
 }
 
 function toDateOrNull_(value) {

@@ -15,6 +15,13 @@
       h1 {
         font-size: 1.35rem;
       }
+      h2 {
+        font-size: 1.1rem;
+        margin-top: 0;
+      }
+      h3 {
+        font-size: 1rem;
+      }
       .toolbar {
         display: flex;
         flex-wrap: wrap;
@@ -97,6 +104,56 @@
         margin-top: 1.5rem;
         font-size: 0.85rem;
       }
+      .detail-panel {
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 1rem 1.25rem;
+        margin: 1.25rem 0;
+        background: #fafafa;
+      }
+      .detail-panel[hidden] {
+        display: none !important;
+      }
+      .readonly-fields {
+        max-height: 14rem;
+        overflow: auto;
+        background: #fff;
+        border: 1px solid #eee;
+        margin-bottom: 1rem;
+      }
+      .readonly-fields table {
+        font-size: 0.75rem;
+      }
+      .readonly-fields td:first-child {
+        color: #555;
+        white-space: nowrap;
+        width: 14rem;
+      }
+      .form-row {
+        margin: 0.65rem 0;
+      }
+      .form-row label {
+        display: block;
+        font-weight: 600;
+        font-size: 0.85rem;
+        margin-bottom: 0.25rem;
+      }
+      .form-row textarea {
+        width: 100%;
+        max-width: 40rem;
+        min-height: 4rem;
+        box-sizing: border-box;
+      }
+      .form-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 1rem;
+      }
+      .btn-edit {
+        font-size: 0.75rem;
+        padding: 0.2rem 0.45rem;
+      }
     </style>
   </head>
   <body>
@@ -134,6 +191,7 @@
       <table>
         <thead>
           <tr>
+            <th></th>
             <th>行</th>
             <th>チャンネル名</th>
             <th>channel_id</th>
@@ -147,11 +205,40 @@
         </thead>
         <tbody id="tbody">
           <tr>
-            <td colspan="9">読み込み中…</td>
+            <td colspan="10">読み込み中…</td>
           </tr>
         </tbody>
       </table>
     </div>
+
+    <section id="detail-panel" class="detail-panel" hidden>
+      <h2>チャンネル詳細 <span class="note" id="detail-row-label"></span></h2>
+      <div class="readonly-fields">
+        <table>
+          <tbody id="detail-readonly-tbody"></tbody>
+        </table>
+      </div>
+      <h3>編集（status / priority_interrupt_at / note）</h3>
+      <p id="detail-status-hint" class="note"></p>
+      <div class="form-row">
+        <label for="detail-status">status</label>
+        <select id="detail-status"></select>
+      </div>
+      <div class="form-row">
+        <label for="detail-priority">priority_interrupt_at</label>
+        <input type="datetime-local" id="detail-priority" />
+        <button type="button" id="detail-priority-clear" class="btn-edit">日時をクリア</button>
+      </div>
+      <div class="form-row">
+        <label for="detail-note">note</label>
+        <textarea id="detail-note" rows="4"></textarea>
+      </div>
+      <p id="detail-save-err" class="err" hidden></p>
+      <div class="form-actions">
+        <button type="button" id="detail-save">保存</button>
+        <button type="button" id="detail-close">閉じる</button>
+      </div>
+    </section>
 
     <details class="phase1">
       <summary>接続確認（Phase 1）</summary>
@@ -165,7 +252,7 @@
 
     <script>
       (function () {
-        var state = { page: 0, pageSize: 100 };
+        var state = { page: 0, pageSize: 100, detail: null };
 
         var tbody = document.getElementById("tbody");
         var listMeta = document.getElementById("list-meta");
@@ -176,6 +263,18 @@
         var filterStatus = document.getElementById("filter-status");
         var filterErrors = document.getElementById("filter-errors");
 
+        var detailPanel = document.getElementById("detail-panel");
+        var detailRowLabel = document.getElementById("detail-row-label");
+        var detailReadonlyTbody = document.getElementById("detail-readonly-tbody");
+        var detailStatusHint = document.getElementById("detail-status-hint");
+        var detailStatus = document.getElementById("detail-status");
+        var detailPriority = document.getElementById("detail-priority");
+        var detailNote = document.getElementById("detail-note");
+        var detailSaveErr = document.getElementById("detail-save-err");
+        var btnDetailSave = document.getElementById("detail-save");
+        var btnDetailClose = document.getElementById("detail-close");
+        var btnPriorityClear = document.getElementById("detail-priority-clear");
+
         function esc(s) {
           if (s == null) return "";
           return String(s)
@@ -183,6 +282,146 @@
             .replace(/</g, "&lt;")
             .replace(/"/g, "&quot;");
         }
+
+        function closeDetail() {
+          state.detail = null;
+          detailPanel.hidden = true;
+          detailSaveErr.hidden = true;
+          detailSaveErr.textContent = "";
+        }
+
+        function openDetail(sheetRow) {
+          detailSaveErr.hidden = true;
+          detailPanel.hidden = false;
+          detailRowLabel.textContent = "（シート行 " + sheetRow + "）";
+          detailReadonlyTbody.innerHTML = "<tr><td colspan='2'>読み込み中…</td></tr>";
+          detailStatus.innerHTML = "";
+          detailPriority.value = "";
+          detailNote.value = "";
+          detailStatusHint.textContent = "";
+
+          google.script.run
+            .withSuccessHandler(function (d) {
+              if (!d || !d.ok) {
+                detailReadonlyTbody.innerHTML =
+                  "<tr><td colspan='2'>" + esc((d && d.message) || "取得に失敗しました") + "</td></tr>";
+                state.detail = null;
+                return;
+              }
+              state.detail = {
+                sheetRow: d.sheetRow,
+                currentStatus: d.currentStatus,
+                statusUiLocked: d.statusUiLocked,
+              };
+
+              var fo = d.fieldOrder || [];
+              var html = "";
+              for (var i = 0; i < fo.length; i++) {
+                var k = fo[i];
+                html +=
+                  "<tr><td>" +
+                  esc(k) +
+                  "</td><td class='mono'>" +
+                  esc(d.fields[k]) +
+                  "</td></tr>";
+              }
+              detailReadonlyTbody.innerHTML = html;
+
+              detailNote.value = d.fields.note != null ? String(d.fields.note) : "";
+              detailPriority.value = d.priority_interrupt_at_input || "";
+
+              var opts = [];
+              var add = function (v) {
+                if (v === undefined || v === null) return;
+                var t = String(v).trim();
+                if (t === "") return;
+                if (opts.indexOf(t) === -1) opts.push(t);
+              };
+              add(d.currentStatus);
+              for (var j = 0; j < (d.allowedStatusTargets || []).length; j++) {
+                add(d.allowedStatusTargets[j]);
+              }
+
+              detailStatus.innerHTML = "";
+              if (opts.length === 0) {
+                var opt0 = document.createElement("option");
+                opt0.value = d.currentStatus || "";
+                opt0.textContent = d.currentStatus ? d.currentStatus : "(空)";
+                detailStatus.appendChild(opt0);
+              } else {
+                for (var o = 0; o < opts.length; o++) {
+                  var opt = document.createElement("option");
+                  opt.value = opts[o];
+                  opt.textContent = opts[o];
+                  detailStatus.appendChild(opt);
+                }
+              }
+              detailStatus.value = d.currentStatus || "";
+              detailStatus.disabled = !!d.statusUiLocked;
+
+              if (d.currentStatus === "RUNNING") {
+                detailStatusHint.textContent =
+                  "RUNNING 中は status を変更できません（note・priority_interrupt_at は変更可）。";
+              } else if (d.statusUiLocked) {
+                detailStatusHint.textContent =
+                  "この status からは UI で別の status へ遷移できません（note・priority_interrupt_at は変更可）。";
+              } else {
+                detailStatusHint.textContent =
+                  "変更可能な status: " + (d.allowedStatusTargets || []).join(", ");
+              }
+            })
+            .withFailureHandler(function (e) {
+              detailReadonlyTbody.innerHTML =
+                "<tr><td colspan='2'>" + esc(e && e.message ? e.message : String(e)) + "</td></tr>";
+              state.detail = null;
+            })
+            .apiGetChannelDetail(sheetRow);
+        }
+
+        tbody.addEventListener("click", function (ev) {
+          var t = ev.target;
+          if (t && t.classList && t.classList.contains("btn-edit")) {
+            var sr = t.getAttribute("data-sheet-row");
+            if (sr) openDetail(parseInt(sr, 10));
+          }
+        });
+
+        btnDetailClose.addEventListener("click", closeDetail);
+        btnPriorityClear.addEventListener("click", function () {
+          detailPriority.value = "";
+        });
+
+        btnDetailSave.addEventListener("click", function () {
+          detailSaveErr.hidden = true;
+          if (!state.detail) {
+            detailSaveErr.textContent = "詳細が読み込まれていません";
+            detailSaveErr.hidden = false;
+            return;
+          }
+          var st = state.detail.statusUiLocked
+            ? state.detail.currentStatus
+            : detailStatus.value;
+          google.script.run
+            .withSuccessHandler(function (r) {
+              if (!r || !r.ok) {
+                detailSaveErr.textContent = (r && r.message) || "保存に失敗しました";
+                detailSaveErr.hidden = false;
+                return;
+              }
+              closeDetail();
+              fetchList();
+            })
+            .withFailureHandler(function (e) {
+              detailSaveErr.textContent = e && e.message ? e.message : String(e);
+              detailSaveErr.hidden = false;
+            })
+            .apiUpdateChannel({
+              sheetRow: state.detail.sheetRow,
+              status: st,
+              note: detailNote.value,
+              priority_interrupt_at: detailPriority.value,
+            });
+        });
 
         function renderList(res) {
           listErr.hidden = true;
@@ -200,7 +439,7 @@
           if (!res || !res.ok) {
             listErr.textContent = (res && res.message) || "一覧の取得に失敗しました。";
             listErr.hidden = false;
-            tbody.innerHTML = '<tr><td colspan="9">—</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10">—</td></tr>';
             listMeta.textContent = "";
             btnPrev.disabled = true;
             btnNext.disabled = true;
@@ -223,7 +462,7 @@
             tp === 0 ? "ページなし" : "ページ " + (p + 1) + " / " + tp;
 
           if (!res.rows || res.rows.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9">該当行がありません</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10">該当行がありません</td></tr>';
             return;
           }
 
@@ -234,6 +473,9 @@
             var stClass = r.status ? "status-" + esc(r.status) : "";
             html +=
               "<tr>" +
+              '<td><button type="button" class="btn-edit" data-sheet-row="' +
+              esc(r.sheetRow) +
+              '">編集</button></td>' +
               "<td>" +
               esc(r.sheetRow) +
               "</td>" +
@@ -269,7 +511,7 @@
         }
 
         function fetchList() {
-          tbody.innerHTML = '<tr><td colspan="9">読み込み中…</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="10">読み込み中…</td></tr>';
           google.script.run
             .withSuccessHandler(renderList)
             .withFailureHandler(function (e) {
@@ -311,7 +553,6 @@
           fetchList();
         });
 
-        /* Phase 1 health */
         var btnHealth = document.getElementById("btn-health");
         var out = document.getElementById("out");
         var warn = document.getElementById("warn");

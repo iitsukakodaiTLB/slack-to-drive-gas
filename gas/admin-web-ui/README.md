@@ -19,7 +19,12 @@
 ## Phase 2（一覧）
 
 - トップ画面で `channel_sync_state` の**読み取り一覧**（`status` フィルタ・エラーのみ・ページング）。
-- 行番号（`sheetRow`）は Phase 3 の詳細編集で使用予定。
+
+## Phase 3（詳細・保存）
+
+- 一覧の **編集** から行を開き、全列を参照しつつ **status**（許可遷移のみ）・**priority_interrupt_at**・**note** を更新可能。
+- 保存時に `ui_last_updated_at` と `ui_last_updated_by`（デプロイ担当者メール、空の場合あり）を更新。
+- `RUNNING` 中は **status のみ**変更不可（note / 優先割り込みは可）。
 
 ## 操作者ログについて（方針）
 

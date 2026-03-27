@@ -32,10 +32,18 @@ function runSlackLogSync() {
     return;
   }
 
+  const hadPriorityInterruptAtStart = !!target.priorityInterruptAt;
   const startedAt = new Date();
   try {
     executeSyncForChannel_(ss, channelSheet, target, runId, startedAt);
-    markRowSuccess_(channelSheet, target.rowIndex, new Date());
+    const successAt = new Date();
+    applyPriorityInterruptAfterSuccessfulRun_(
+      channelSheet,
+      target.rowIndex,
+      hadPriorityInterruptAtStart,
+      successAt
+    );
+    markRowSuccess_(channelSheet, target.rowIndex, successAt);
   } catch (error) {
     markRowFailure_(channelSheet, target.rowIndex, error);
     throw error;
@@ -392,6 +400,28 @@ function releaseLeaseForRow_(sheet, rowIndex, runId) {
 function markRowRunHeartbeat_(sheet, rowIndex, now) {
   const c = COLS.CHANNEL_SYNC_STATE;
   sheet.getRange(rowIndex, c.SORT_LAST_RUN_AT).setValue(now);
+}
+
+/**
+ * 同期開始時点で priority_interrupt_at が入っていた行のみ、1 回の成功後に更新する。
+ * LIVE ならクリア、BACKFILL なら現在日時へ再設定（空欄で開始した行は変更しない）。
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {number} rowIndex
+ * @param {boolean} hadPriorityInterruptAtStart
+ * @param {Date} now
+ */
+function applyPriorityInterruptAfterSuccessfulRun_(sheet, rowIndex, hadPriorityInterruptAtStart, now) {
+  if (!hadPriorityInterruptAtStart) {
+    return;
+  }
+  const c = COLS.CHANNEL_SYNC_STATE;
+  const syncMode = toStringSafe_(sheet.getRange(rowIndex, c.SYNC_MODE).getValue());
+  if (syncMode === SYNC_MODE.LIVE) {
+    sheet.getRange(rowIndex, c.PRIORITY_INTERRUPT_AT).clearContent();
+  } else if (syncMode === SYNC_MODE.BACKFILL) {
+    sheet.getRange(rowIndex, c.PRIORITY_INTERRUPT_AT).setValue(now);
+  }
 }
 
 function markRowSuccess_(sheet, rowIndex, now) {

@@ -93,7 +93,7 @@ function apiRegisterChannel(payload) {
         ok: false,
         code: "NOT_FOUND",
         message:
-          "一致するチャンネルがありません。名前（# なし・小文字比較）・Bot の参加・非アーカイブを確認してください。",
+          "一致する公開チャンネルがありません。名前（# なし・小文字比較）・非アーカイブを確認してください。プライベートチャンネルは UI 登録の対象外です。",
       };
     }
     if (matches.length > 1) {

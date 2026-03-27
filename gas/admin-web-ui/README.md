@@ -28,9 +28,10 @@
 
 ## Phase 4（新規チャンネル登録）
 
-- 画面上部のフォームから **チャンネル名**を入力し、`conversations.list` で **public / private（非アーカイブ）**を走査して名前一致（`#` 除去・小文字）で `channel_id` を決定。
+- 画面上部のフォームから **チャンネル名**を入力し、`conversations.list` で **公開チャンネル（`public_channel`・非アーカイブ）のみ**走査し、名前一致（`#` 除去・小文字）で `channel_id` を決定。
+- **プライベートチャンネルは UI 登録の対象外**（`groups:read` 不要。必要になったら要件と実装を拡張する）。
 - 既に `channel_sync_state` に同じ `channel_id` があれば登録しない。
-- Bot に **channels:read**（private には **groups:read** 相当・チャンネルへの参加）が必要。`SLACK_BOT_TOKEN` を Script Properties に設定すること。
+- Bot に **`channels:read`** が必要。`SLACK_BOT_TOKEN` を Script Properties に設定すること。
 
 ## 操作者ログについて（方針）
 

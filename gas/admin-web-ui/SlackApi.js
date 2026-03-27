@@ -66,7 +66,7 @@ function slackApiGet_(method, params) {
 }
 
 /**
- * Bot が参照できる非アーカイブの public / private チャンネル一覧（ページング結合）
+ * 非アーカイブの公開チャンネルのみ（`channels:read` で足りる想定。private は MVP 対象外）
  * @returns {Object[]} Slack channel オブジェクトの配列
  */
 function slackListAllConversationsForRegister_() {
@@ -77,7 +77,7 @@ function slackListAllConversationsForRegister_() {
 
   for (let page = 0; page < maxPages; page += 1) {
     const params = {
-      types: "public_channel,private_channel",
+      types: "public_channel",
       exclude_archived: true,
       limit: limit,
     };

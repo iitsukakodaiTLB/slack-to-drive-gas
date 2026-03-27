@@ -17,6 +17,7 @@
 - `thread_queue` の `DONE` は同一シートで管理し、保持期限（90日）超過分を定期削除する。
 - 保存項目はスリム化しつつ、`user_name` と `reaction_summary` は保持する。
 - API コスト抑制のため、`chat.getPermalink` は呼ばない。`users.info` は未キャッシュ `user_id` のみ呼ぶ。
+- **管理 Web UI** は同期ワーカーとは別 GAS。`channel_sync_state` の末尾に **`ui_last_updated_at` / `ui_last_updated_by`** を置き、Web UI 経由の最終更新者を記録する（同期ワーカーは当該列を**更新しない**）。任意で **`admin_ui_audit`** シートに操作ログを追記する。要件の正本は [admin-web-ui-requirements.md](./admin-web-ui-requirements.md)。
 
 ---
 
@@ -116,6 +117,8 @@
 | 27  | `registered_at`               | 登録日時                                             |
 | 28  | `registered_by`               | 登録者                                              |
 | 29  | `note`                        | 備考                                               |
+| 30  | `ui_last_updated_at`          | 管理 Web UI 経由で当該行が最後に更新された日時（同期ワーカーは触らない）        |
+| 31  | `ui_last_updated_by`          | 上記操作を行った Google ユーザーのメール（`Session.getActiveUser()`）   |
 
 
 ### 4.2 追加シート（推奨）
@@ -134,6 +137,21 @@
 | `replies_next_cursor`     | ページ再開カーソル                          |
 | `last_reply_ts_processed` | 重複防止用                              |
 | `updated_at`              | 更新日時                               |
+
+#### `admin_ui_audit` シート（任意・推奨）
+
+管理 Web UI からの操作の**追記専用ログ**。同期ワーカーは読み書きしない。
+
+| 列名 | 内容 |
+|------|------|
+| `logged_at` | 記録日時（サーバー時刻） |
+| `actor_email` | 操作者メール（`Session.getActiveUser().getEmail()`） |
+| `action` | 操作種別（例: `channel_update`, `channel_register`） |
+| `channel_id` | 対象チャンネル ID（該当しない操作は空可） |
+| `summary` | 変更概要（JSON 文字列や人可読の短文。長文は控える） |
+
+- 行の更新・削除は行わず、**常に末尾に追記**する。
+- 肥大化対策（アーカイブ・削除方針）は運用で別途決める（MVP では未規定でよい）。
 
 ### 4.3 `thread_queue` の運用ルール（中断再開）
 
@@ -240,8 +258,10 @@
 ### 8.1 channel_sync_state
 
 ```csv
-status,channel_id,channel_name_current,priority_interrupt_at,sort_last_run_at,live_last_message_at,sync_mode,backfill_completed_at,history_oldest_ts,history_next_cursor,history_inclusive,live_last_message_ts,thread_current_parent_ts,replies_next_cursor,thread_queue_ref,drive_csv_current_part,drive_jsonl_current_part,drive_csv_current_file_id,drive_jsonl_current_file_id,drive_last_renamed_at,lock_owner,lock_until,last_success_at,last_error_at,last_error_message,consecutive_failures,registered_at,registered_by,note
+status,channel_id,channel_name_current,priority_interrupt_at,sort_last_run_at,live_last_message_at,sync_mode,backfill_completed_at,history_oldest_ts,history_next_cursor,history_inclusive,live_last_message_ts,thread_current_parent_ts,replies_next_cursor,thread_queue_ref,drive_csv_current_part,drive_jsonl_current_part,drive_csv_current_file_id,drive_jsonl_current_file_id,drive_last_renamed_at,lock_owner,lock_until,last_success_at,last_error_at,last_error_message,consecutive_failures,registered_at,registered_by,note,ui_last_updated_at,ui_last_updated_by
 ```
+
+**既存シート移行:** すでに 29 列までしかない場合は、`note` の右隣に上記 2 列を**手動またはスクリプトで追加**し、1 行目のヘッダーを設計どおりに合わせる。同期ワーカー実行前に `validateAllSheetSchemas_` / `healthCheck` でヘッダー一致を確認する。
 
 ### 8.2 thread_queue
 
@@ -253,6 +273,12 @@ queue_id,channel_id,parent_thread_ts,status,replies_next_cursor,last_reply_ts_pr
 
 ```csv
 user_id,display_name,real_name,is_bot,is_deleted,updated_at
+```
+
+### 8.4 admin_ui_audit（任意）
+
+```csv
+logged_at,actor_email,action,channel_id,summary
 ```
 
 ---
@@ -296,6 +322,8 @@ user_id,display_name,real_name,is_bot,is_deleted,updated_at
 | `registered_at` | DATETIME |
 | `registered_by` | STRING |
 | `note` | STRING(nullable) |
+| `ui_last_updated_at` | DATETIME(nullable) |
+| `ui_last_updated_by` | STRING(nullable) |
 
 ### 9.2 thread_queue の列型（推奨）
 
@@ -326,11 +354,23 @@ user_id,display_name,real_name,is_bot,is_deleted,updated_at
 | `is_deleted` | BOOLEAN |
 | `updated_at` | DATETIME |
 
+### 9.4 admin_ui_audit の列型（推奨）
+
+| 列名 | 型 |
+|------|-----|
+| `logged_at` | DATETIME |
+| `actor_email` | STRING |
+| `action` | STRING |
+| `channel_id` | STRING(nullable) |
+| `summary` | STRING(nullable) |
+
 ---
 
 ## 10. 実装時チェックリスト
 
-- `Config.js` に列名/列番号・`limit`・時間予算・ファイル分割閾値を定義
+- `Config.js` に列名/列番号・`limit`・時間予算・ファイル分割閾値を定義（`channel_sync_state` は **31 列**、`ui_*` は同期ワーカーから**書き込まない**）
+- 既存スプレッドシートへ **`ui_last_updated_at` / `ui_last_updated_by`** を追加したうえでヘッダー検証を通す
+- 管理 Web UI 用に **`admin_ui_audit`** シートを使う場合は §8.4 のヘッダーで作成（任意）
 - Script Properties に Slack Token / Spreadsheet ID / Drive Folder ID を定義
 - `ts` 比較ヘルパーを実装（小数点付き文字列を安全比較）
 - カーソル更新順序を固定（書き込み成功後にカーソル更新）

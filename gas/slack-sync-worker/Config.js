@@ -110,6 +110,8 @@ const SHEET_HEADERS = Object.freeze({
     "registered_at",
     "registered_by",
     "note",
+    "ui_last_updated_at",
+    "ui_last_updated_by",
   ]),
 
   THREAD_QUEUE: Object.freeze([
@@ -172,6 +174,9 @@ const COLS = Object.freeze({
     REGISTERED_AT: 27,
     REGISTERED_BY: 28,
     NOTE: 29,
+    /** 管理 Web UI のみ更新。同期ワーカーは書き込まない。 */
+    UI_LAST_UPDATED_AT: 30,
+    UI_LAST_UPDATED_BY: 31,
   }),
 
   THREAD_QUEUE: Object.freeze({

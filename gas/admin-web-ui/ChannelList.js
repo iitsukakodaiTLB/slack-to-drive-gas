@@ -79,20 +79,6 @@ function formatDateSlashMs_(ms) {
  * @param {Object} c COLS.CHANNEL_SYNC_STATE
  * @returns {string}
  */
-function formatDateSlashFromRowStart_(row, c) {
-  const ts = String(row[c.HISTORY_OLDEST_TS - 1] || "").trim();
-  const ms = slackTsToMs_(ts);
-  if (ms != null) {
-    return formatDateSlashMs_(ms);
-  }
-  return "";
-}
-
-/**
- * @param {Object[]} row
- * @param {Object} c COLS.CHANNEL_SYNC_STATE
- * @returns {string}
- */
 function formatDateSlashFromRowEnd_(row, c) {
   const liveAt = row[c.LIVE_LAST_MESSAGE_AT - 1];
   const dm = cellDateMs_(liveAt);
@@ -114,18 +100,10 @@ function formatDateSlashFromRowEnd_(row, c) {
  * @returns {string}
  */
 function buildFetchedRangeDetail_(row, c, isBackfill) {
-  const fr = formatDateSlashFromRowStart_(row, c);
   const to = formatDateSlashFromRowEnd_(row, c);
-  let core = "";
-  if (!fr && !to) {
-    core = "取得範囲は未確定です";
-  } else if (!fr && to) {
-    core = "～ " + to + " までのメッセージを取得済み";
-  } else if (fr && !to) {
-    core = fr + " ～ （終端日未確定）までのメッセージを取得済み";
-  } else {
-    core = fr + " ～ " + to + " までのメッセージを取得済み";
-  }
+  const core = to
+    ? to + " までのメッセージを取得済み"
+    : "取得範囲は未確定です";
   if (isBackfill) {
     return core + "（バックフィル継続中）";
   }

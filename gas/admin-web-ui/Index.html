@@ -8,43 +8,315 @@
     <style>
       body {
         font-family: system-ui, sans-serif;
-        max-width: 48rem;
-        margin: 1.5rem auto;
+        max-width: 1200px;
+        margin: 1rem auto;
         padding: 0 1rem;
+      }
+      h1 {
+        font-size: 1.35rem;
+      }
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.75rem 1rem;
+        margin-bottom: 1rem;
+      }
+      .toolbar label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.9rem;
+      }
+      select {
+        min-width: 10rem;
+      }
+      .pager {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin: 0.75rem 0;
+        font-size: 0.9rem;
+      }
+      .table-wrap {
+        overflow-x: auto;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.8rem;
+      }
+      th,
+      td {
+        border-bottom: 1px solid #eee;
+        padding: 0.4rem 0.5rem;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #f6f6f6;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      tr:hover td {
+        background: #fafafa;
+      }
+      .mono {
+        font-family: ui-monospace, monospace;
+        font-size: 0.75rem;
+      }
+      .status-RUNNING {
+        color: #2563eb;
+      }
+      .status-ERROR {
+        color: #dc2626;
+      }
+      .status-DISABLED {
+        color: #6b7280;
       }
       pre {
         background: #f4f4f4;
-        padding: 1rem;
+        padding: 0.75rem;
         overflow: auto;
-        font-size: 0.85rem;
+        font-size: 0.75rem;
       }
       .warn {
         color: #b45309;
       }
       .note {
-        font-size: 0.9rem;
+        font-size: 0.85rem;
         color: #444;
+      }
+      .err {
+        color: #b91c1c;
+        font-size: 0.9rem;
+      }
+      details.phase1 {
+        margin-top: 1.5rem;
+        font-size: 0.85rem;
       }
     </style>
   </head>
   <body>
     <h1>Slack 同期 管理</h1>
-    <p>Phase 1: 接続とスプレッドシートヘッダーの確認</p>
-    <p>
-      <button type="button" id="btn-health">接続確認</button>
-    </p>
-    <p id="policy" class="note" hidden></p>
-    <p id="warn" class="warn" hidden></p>
-    <pre id="out">「接続確認」を押してください。</pre>
+
+    <div class="toolbar">
+      <label>
+        status
+        <select id="filter-status">
+          <option value="">（すべて）</option>
+          <option value="PENDING">PENDING</option>
+          <option value="RUNNING">RUNNING</option>
+          <option value="WAITING">WAITING</option>
+          <option value="ERROR">ERROR</option>
+          <option value="DISABLED">DISABLED</option>
+        </select>
+      </label>
+      <label>
+        <input type="checkbox" id="filter-errors" />
+        エラーのみ（<code>last_error_at</code> あり or status=ERROR）
+      </label>
+      <button type="button" id="btn-refresh">一覧を更新</button>
+    </div>
+
+    <p id="list-meta" class="note"></p>
+    <p id="list-err" class="err" hidden></p>
+
+    <div class="pager">
+      <button type="button" id="btn-prev" disabled>前へ</button>
+      <span id="pager-label"></span>
+      <button type="button" id="btn-next" disabled>次へ</button>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>行</th>
+            <th>チャンネル名</th>
+            <th>channel_id</th>
+            <th>status</th>
+            <th>sort_last_run_at</th>
+            <th>live_last_message_at</th>
+            <th>last_error_at</th>
+            <th>last_error_message</th>
+            <th>ui_last_updated_at</th>
+          </tr>
+        </thead>
+        <tbody id="tbody">
+          <tr>
+            <td colspan="9">読み込み中…</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <details class="phase1">
+      <summary>接続確認（Phase 1）</summary>
+      <p>
+        <button type="button" id="btn-health">接続確認</button>
+      </p>
+      <p id="policy" class="note" hidden></p>
+      <p id="warn" class="warn" hidden></p>
+      <pre id="out">未実行</pre>
+    </details>
 
     <script>
       (function () {
-        var btn = document.getElementById("btn-health");
+        var state = { page: 0, pageSize: 100 };
+
+        var tbody = document.getElementById("tbody");
+        var listMeta = document.getElementById("list-meta");
+        var listErr = document.getElementById("list-err");
+        var pagerLabel = document.getElementById("pager-label");
+        var btnPrev = document.getElementById("btn-prev");
+        var btnNext = document.getElementById("btn-next");
+        var filterStatus = document.getElementById("filter-status");
+        var filterErrors = document.getElementById("filter-errors");
+
+        function esc(s) {
+          if (s == null) return "";
+          return String(s)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/"/g, "&quot;");
+        }
+
+        function renderList(res) {
+          listErr.hidden = true;
+          if (
+            res &&
+            res.ok &&
+            res.totalFiltered > 0 &&
+            res.rows.length === 0 &&
+            res.totalPages > 0
+          ) {
+            state.page = res.totalPages - 1;
+            fetchList();
+            return;
+          }
+          if (!res || !res.ok) {
+            listErr.textContent = (res && res.message) || "一覧の取得に失敗しました。";
+            listErr.hidden = false;
+            tbody.innerHTML = '<tr><td colspan="9">—</td></tr>';
+            listMeta.textContent = "";
+            btnPrev.disabled = true;
+            btnNext.disabled = true;
+            pagerLabel.textContent = "";
+            return;
+          }
+
+          var tf = res.totalFiltered;
+          var p = res.page;
+          var ps = res.pageSize;
+          var tp = res.totalPages;
+          var from = tf === 0 ? 0 : p * ps + 1;
+          var to = Math.min((p + 1) * ps, tf);
+          listMeta.textContent =
+            "該当 " + tf + " 件（表示 " + from + "–" + to + "、1 ページあたり最大 " + ps + " 件）";
+
+          btnPrev.disabled = p <= 0;
+          btnNext.disabled = tp === 0 || p >= tp - 1;
+          pagerLabel.textContent =
+            tp === 0 ? "ページなし" : "ページ " + (p + 1) + " / " + tp;
+
+          if (!res.rows || res.rows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="9">該当行がありません</td></tr>';
+            return;
+          }
+
+          var html = "";
+          for (var i = 0; i < res.rows.length; i++) {
+            var r = res.rows[i];
+            var st = esc(r.status);
+            var stClass = r.status ? "status-" + esc(r.status) : "";
+            html +=
+              "<tr>" +
+              "<td>" +
+              esc(r.sheetRow) +
+              "</td>" +
+              "<td>" +
+              esc(r.channel_name_current) +
+              "</td>" +
+              '<td class="mono">' +
+              esc(r.channel_id) +
+              "</td>" +
+              '<td class="' +
+              stClass +
+              '">' +
+              st +
+              "</td>" +
+              "<td>" +
+              esc(r.sort_last_run_at) +
+              "</td>" +
+              "<td>" +
+              esc(r.live_last_message_at) +
+              "</td>" +
+              "<td>" +
+              esc(r.last_error_at) +
+              "</td>" +
+              "<td>" +
+              esc(r.last_error_message) +
+              "</td>" +
+              "<td>" +
+              esc(r.ui_last_updated_at) +
+              "</td>" +
+              "</tr>";
+          }
+          tbody.innerHTML = html;
+        }
+
+        function fetchList() {
+          tbody.innerHTML = '<tr><td colspan="9">読み込み中…</td></tr>';
+          google.script.run
+            .withSuccessHandler(renderList)
+            .withFailureHandler(function (e) {
+              renderList({
+                ok: false,
+                message: e && e.message ? e.message : String(e),
+              });
+            })
+            .apiListChannels({
+              status: filterStatus.value,
+              errorsOnly: filterErrors.checked,
+              page: state.page,
+              pageSize: state.pageSize,
+            });
+        }
+
+        document.getElementById("btn-refresh").addEventListener("click", function () {
+          state.page = 0;
+          fetchList();
+        });
+
+        filterStatus.addEventListener("change", function () {
+          state.page = 0;
+          fetchList();
+        });
+        filterErrors.addEventListener("change", function () {
+          state.page = 0;
+          fetchList();
+        });
+
+        btnPrev.addEventListener("click", function () {
+          if (state.page > 0) {
+            state.page -= 1;
+            fetchList();
+          }
+        });
+        btnNext.addEventListener("click", function () {
+          state.page += 1;
+          fetchList();
+        });
+
+        /* Phase 1 health */
+        var btnHealth = document.getElementById("btn-health");
         var out = document.getElementById("out");
         var warn = document.getElementById("warn");
         var policy = document.getElementById("policy");
-
-        btn.addEventListener("click", function () {
+        btnHealth.addEventListener("click", function () {
           out.textContent = "確認中…";
           warn.hidden = true;
           policy.hidden = true;
@@ -65,6 +337,8 @@
             })
             .apiGetHealth();
         });
+
+        fetchList();
       })();
     </script>
   </body>

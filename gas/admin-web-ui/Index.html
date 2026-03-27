@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <base target="_top" />
+    <title>Slack 同期 管理</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 48rem;
+        margin: 1.5rem auto;
+        padding: 0 1rem;
+      }
+      pre {
+        background: #f4f4f4;
+        padding: 1rem;
+        overflow: auto;
+        font-size: 0.85rem;
+      }
+      .warn {
+        color: #b45309;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Slack 同期 管理</h1>
+    <p>Phase 1: 接続とスプレッドシートヘッダーの確認</p>
+    <p>
+      <button type="button" id="btn-health">接続確認</button>
+    </p>
+    <p id="warn" class="warn" hidden></p>
+    <pre id="out">「接続確認」を押してください。</pre>
+
+    <script>
+      (function () {
+        var btn = document.getElementById("btn-health");
+        var out = document.getElementById("out");
+        var warn = document.getElementById("warn");
+
+        btn.addEventListener("click", function () {
+          out.textContent = "確認中…";
+          warn.hidden = true;
+          google.script.run
+            .withSuccessHandler(function (r) {
+              out.textContent = JSON.stringify(r, null, 2);
+              if (r && r.actorEmailWarning) {
+                warn.textContent = r.actorEmailWarning;
+                warn.hidden = false;
+              }
+            })
+            .withFailureHandler(function (e) {
+              out.textContent = "エラー: " + (e && e.message ? e.message : String(e));
+            })
+            .apiGetHealth();
+        });
+      })();
+    </script>
+  </body>
+</html>

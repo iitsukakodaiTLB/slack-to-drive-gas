@@ -3,35 +3,45 @@
  */
 
 /**
- * 接続・ヘッダー・操作者メールの診断（書き込みなし）
+ * 接続・ヘッダー・実行主体メールの診断（書き込みなし）
  * @returns {{
  *   ok: boolean,
  *   spreadsheetIdSet: boolean,
  *   channelSheetFound: boolean,
  *   headerOk: boolean,
  *   message: string,
- *   actorEmail: string,
- *   actorEmailWarning: string
+ *   spreadsheetExecutorEmail: string,
+ *   visitorEmail: string,
+ *   policyNote: string,
+ *   warning: string
  * }}
  */
 function apiGetHealth() {
   const props = PropertiesService.getScriptProperties();
   const id = props.getProperty(CONFIG.SPREADSHEET.ID_PROPERTY_KEY);
+  const policyNote =
+    "運用方針: スプレッドシートへの読み書きは「ウェブアプリのデプロイで選んだ実行ユーザー」の権限で行います。" +
+    "「自分」としてデプロイしている場合、来訪者ごとの操作者メールは記録しません（ui_last_updated_by は空またはデプロイ者固定など実装で統一）。";
+
   const result = {
     ok: false,
     spreadsheetIdSet: !!(id && String(id).trim()),
     channelSheetFound: false,
     headerOk: false,
     message: "",
-    actorEmail: "",
-    actorEmailWarning: "",
+    spreadsheetExecutorEmail: "",
+    visitorEmail: "",
+    policyNote: policyNote,
+    warning: "",
   };
 
   try {
-    result.actorEmail = getActorEmail_();
-    if (!result.actorEmail) {
-      result.actorEmailWarning =
-        "操作者メールを取得できませんでした。Web アプリのデプロイで「実行ユーザー」が「アプリにアクセスしているユーザー」になっているか、またはドメイン・ログイン状態を確認してください。空のままでは監査列への記録が困難です。詳細は README を参照。";
+    result.spreadsheetExecutorEmail = getSpreadsheetExecutorEmail_();
+    result.visitorEmail = getVisitorEmailForDebug_();
+
+    if (!result.spreadsheetExecutorEmail) {
+      result.warning =
+        "実行主体（Session.getEffectiveUser）のメールを取得できませんでした。エディタからのテスト実行と、ウェブアプリ URL からの実行で結果が異なる場合があります。";
     }
 
     if (!result.spreadsheetIdSet) {

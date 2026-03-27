@@ -62,29 +62,34 @@ function validateSheetHeaderRow_(sheet, expectedHeaders) {
 }
 
 /**
- * Web UI 利用者のメール（監査用）。デプロイ設定によっては空文字になる。
+ * スプレッドシートを実際に触る権限の主体（Web アプリ「自分として実行」＝通常はデプロイ担当者）
  * @returns {string}
  */
-function getActorEmail_() {
-  let email = "";
+function getSpreadsheetExecutorEmail_() {
   try {
-    const u = Session.getActiveUser();
+    const u = Session.getEffectiveUser();
     if (u) {
-      email = String(u.getEmail() || "").trim();
+      return String(u.getEmail() || "").trim();
     }
   } catch (e) {
     // ignore
   }
-  if (email) {
-    return email;
-  }
+  return "";
+}
+
+/**
+ * ブラウザでログインしているユーザー（「アクセスしているユーザーとして実行」のときのみ取れることが多い）。
+ * 運用方針で「自分として実行」の場合は空になりやすい。監査には使わない。
+ * @returns {string}
+ */
+function getVisitorEmailForDebug_() {
   try {
-    const u = Session.getEffectiveUser();
+    const u = Session.getActiveUser();
     if (u) {
-      email = String(u.getEmail() || "").trim();
+      return String(u.getEmail() || "").trim();
     }
-  } catch (e2) {
+  } catch (e) {
     // ignore
   }
-  return email;
+  return "";
 }

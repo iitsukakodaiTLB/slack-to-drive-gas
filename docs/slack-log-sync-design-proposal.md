@@ -17,7 +17,7 @@
 - `thread_queue` の `DONE` は同一シートで管理し、保持期限（90日）超過分を定期削除する。
 - 保存項目はスリム化しつつ、`user_name` と `reaction_summary` は保持する。
 - API コスト抑制のため、`chat.getPermalink` は呼ばない。`users.info` は未キャッシュ `user_id` のみ呼ぶ。
-- **管理 Web UI** は同期ワーカーとは別 GAS。`channel_sync_state` の末尾に **`ui_last_updated_at` / `ui_last_updated_by`** を置き、Web UI 経由の最終更新者を記録する（同期ワーカーは当該列を**更新しない**）。任意で **`admin_ui_audit`** シートに操作ログを追記する。要件の正本は [admin-web-ui-requirements.md](./admin-web-ui-requirements.md)。
+- **管理 Web UI** は同期ワーカーとは別 GAS。`channel_sync_state` の末尾に **`ui_last_updated_at` / `ui_last_updated_by`** を置く（同期ワーカーは当該列を**更新しない**）。`ui_last_updated_by` は運用方針により空またはデプロイ担当者固定等、来訪者個人を記録しない場合がある。任意で **`admin_ui_audit`** シートに操作ログを追記する。要件の正本は [admin-web-ui-requirements.md](./admin-web-ui-requirements.md)。
 
 ---
 
@@ -118,7 +118,7 @@
 | 28  | `registered_by`               | 登録者                                              |
 | 29  | `note`                        | 備考                                               |
 | 30  | `ui_last_updated_at`          | 管理 Web UI 経由で当該行が最後に更新された日時（同期ワーカーは触らない）        |
-| 31  | `ui_last_updated_by`          | 上記操作を行った Google ユーザーのメール（`Session.getActiveUser()`）   |
+| 31  | `ui_last_updated_by`          | 管理 Web UI が最後に当該行を更新した主体の識別子（運用により空、またはデプロイ担当者メール等。来訪者個人の特定に使わない場合あり） |
 
 
 ### 4.2 追加シート（推奨）

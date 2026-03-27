@@ -21,6 +21,10 @@
       .warn {
         color: #b45309;
       }
+      .note {
+        font-size: 0.9rem;
+        color: #444;
+      }
     </style>
   </head>
   <body>
@@ -29,6 +33,7 @@
     <p>
       <button type="button" id="btn-health">接続確認</button>
     </p>
+    <p id="policy" class="note" hidden></p>
     <p id="warn" class="warn" hidden></p>
     <pre id="out">「接続確認」を押してください。</pre>
 
@@ -37,15 +42,21 @@
         var btn = document.getElementById("btn-health");
         var out = document.getElementById("out");
         var warn = document.getElementById("warn");
+        var policy = document.getElementById("policy");
 
         btn.addEventListener("click", function () {
           out.textContent = "確認中…";
           warn.hidden = true;
+          policy.hidden = true;
           google.script.run
             .withSuccessHandler(function (r) {
               out.textContent = JSON.stringify(r, null, 2);
-              if (r && r.actorEmailWarning) {
-                warn.textContent = r.actorEmailWarning;
+              if (r && r.policyNote) {
+                policy.textContent = r.policyNote;
+                policy.hidden = false;
+              }
+              if (r && r.warning) {
+                warn.textContent = r.warning;
                 warn.hidden = false;
               }
             })

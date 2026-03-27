@@ -91,7 +91,7 @@
 | 1   | `status`                      | `PENDING / RUNNING / WAITING / ERROR / DISABLED` |
 | 2   | `channel_id`                  | 主キー（不変）                                          |
 | 3   | `channel_name_current`        | 最新チャンネル名（表示/命名用）                                 |
-| 4   | `priority_interrupt_at`       | 優先割り込み日時                                         |
+| 4   | `priority_interrupt_at`       | 優先割り込み日時（空欄＝通常優先度。値ありは選定で先に回す。同期**成功後**の更新ルールは §6.4） |
 | 5   | `sort_last_run_at`            | 最終試行時刻（優先度ソート用）                                  |
 | 6   | `live_last_message_at`        | 最終成功取り込み時刻（可読）                                   |
 | 7   | `sync_mode`                   | `BACKFILL` or `LIVE`                             |
@@ -214,23 +214,48 @@
 6. `reply_count > 0` を `thread_queue` に投入
 7. `thread_queue` を予算内で処理（`replies_next_cursor` で再開）
 8. 成功した分のカーソル (`*_ts`, `*_next_cursor`) と時刻 (`sort_last_run_at`, `last_success_at`, `live_last_message_at`) を更新
-9. ロック解放して `status=WAITING`（または運用上の待機状態）
-10. エラー時は `last_error_*`, `consecutive_failures` 更新し、次回再開可能なカーソルは維持
-11. 実行終盤で `thread_queue` の `DONE` かつ期限超過（90日）を削除
+9. 同期が**例外なく成功**したとき、実行**開始時点**で `priority_interrupt_at` が空でなかった行について、実行**終了時点**の `sync_mode` に応じて同列を更新する（§6.4）
+10. ロック解放して `status=WAITING`（または運用上の待機状態）
+11. エラー時は `last_error_*`, `consecutive_failures` 更新し、次回再開可能なカーソルは維持
+12. 実行終盤で `thread_queue` の `DONE` かつ期限超過（90日）を削除
 
 ### 6.3 対象行選定（優先順位）
 
 実行時に `status != DISABLED` の行から以下で 1 件選ぶ。
 
-1. `priority_interrupt_at` が入っている行を最優先（昇順）
-2. 同順位は `sort_last_run_at` 昇順（古い順）
-3. `sort_last_run_at` が同値/空なら `live_last_message_at` 昇順（古い順）
-4. さらに同値なら `registered_at` 昇順
+`priority_interrupt_at` による大まかな順序は次のとおり。
+
+1. **値あり**の行を **値なし**より先に選ぶ。
+2. 値あり同士は `priority_interrupt_at` の**昇順**（**古い日時が先**＝いわゆる「古い申請ほど優先」）。
+3. 値なし同士（および 2. で同順のとき）は以下のタイブレークに進む。
+
+タイブレーク（いずれも昇順・空は「最古」扱いで先に回しやすい）:
+
+1. `sort_last_run_at`
+2. `live_last_message_at`
+3. 現行ワーカー実装: **シート上の行番号**（上の行ほど先）
 
 補足:
 
+- `DISABLED` の行は選定対象外（一覧表示などでは末尾に並べる運用可）。
 - `RUNNING` 行でも `lock_until` 期限切れなら選定対象に戻す。
 - `ERROR` は通常対象に含める（自動復旧重視）。恒久停止したい場合のみ `DISABLED`。
+- タイブレーク 3 は実装都合で `registered_at` 列ではなく**行番号**を使う。将来 `registered_at` に寄せる場合はワーカーの `compareChannelPriority_` を変更する。
+
+### 6.4 同期成功後の `priority_interrupt_at` 更新
+
+**失敗**（例外・`markRowFailure_`）時は `priority_interrupt_at` を**変更しない**（優先の意図を残す）。
+
+**成功**（1 回の `executeSyncForChannel_` が例外なく終わったとき）のみ、次を適用する。判定に使う「開始時点で空だったか」は、**当該実行で行ロックを取る直前**に読んだ行モデル（選定時のスナップショット）に基づく。
+
+| 実行開始時の `priority_interrupt_at` | 実行終了時の `sync_mode` | 成功後の `priority_interrupt_at` |
+| ----------------------------- | -------------------- | --------------------- |
+| 空欄                            | （任意）                 | **変更しない**（空欄のまま）    |
+| 値あり                           | `LIVE`               | **空欄にクリア**           |
+| 値あり                           | `BACKFILL`           | **成功時刻（現在日時）で上書き**   |
+| 値あり                           | 上記以外（空文字など）          | **変更しない**（想定外のため）    |
+
+同一実行内でバックフィル完了により `BACKFILL` → `LIVE` に遷移した場合、終了時は `LIVE` のため **クリア**される。
 
 ---
 

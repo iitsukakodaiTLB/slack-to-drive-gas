@@ -13,6 +13,10 @@ const CONFIG = Object.freeze({
   SLACK: Object.freeze({
     BOT_TOKEN_PROPERTY_KEY: "SLACK_BOT_TOKEN",
     API_BASE_URL: "https://slack.com/api",
+    /** conversations.list 1 回あたり（最大 1000、運用は 200 推奨） */
+    CONVERSATIONS_LIST_LIMIT: 200,
+    /** ページング安全上限（200×40 = 8000 チャンネルまで） */
+    CONVERSATIONS_LIST_MAX_PAGES: 40,
   }),
 
   /** 一覧 API の 1 回あたり最大行数（ヘッダー除く） */
@@ -25,6 +29,11 @@ const STATUS = Object.freeze({
   WAITING: "WAITING",
   ERROR: "ERROR",
   DISABLED: "DISABLED",
+});
+
+const SYNC_MODE = Object.freeze({
+  BACKFILL: "BACKFILL",
+  LIVE: "LIVE",
 });
 
 const SHEET_HEADERS = Object.freeze({

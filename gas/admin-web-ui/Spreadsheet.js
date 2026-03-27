@@ -93,3 +93,27 @@ function getVisitorEmailForDebug_() {
   }
   return "";
 }
+
+/**
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {string} channelId
+ * @returns {number|null} シート行番号（1-based）、なければ null
+ */
+function findDataRowIndexByChannelId_(sheet, channelId) {
+  const target = String(channelId || "").trim();
+  if (!target) {
+    return null;
+  }
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return null;
+  }
+  const c = COLS.CHANNEL_SYNC_STATE.CHANNEL_ID;
+  const colValues = sheet.getRange(2, c, lastRow, c).getValues();
+  for (let i = 0; i < colValues.length; i += 1) {
+    if (String(colValues[i][0] || "").trim() === target) {
+      return i + 2;
+    }
+  }
+  return null;
+}

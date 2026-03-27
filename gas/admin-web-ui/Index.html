@@ -8,7 +8,7 @@
     <style>
       body {
         font-family: system-ui, sans-serif;
-        max-width: 1200px;
+        max-width: 1400px;
         margin: 1rem auto;
         padding: 0 1rem;
       }
@@ -74,14 +74,65 @@
         font-family: ui-monospace, monospace;
         font-size: 0.75rem;
       }
-      .status-RUNNING {
-        color: #2563eb;
+      .status-chip {
+        display: inline-block;
+        padding: 0.12rem 0.5rem;
+        border-radius: 999px;
+        font-weight: 600;
+        font-size: 0.72rem;
+        line-height: 1.25;
+        white-space: nowrap;
+        background: #f3f4f6;
+        color: #374151;
       }
-      .status-ERROR {
-        color: #dc2626;
+      .status-chip-PENDING {
+        background: #fef3c7;
+        color: #92400e;
       }
-      .status-DISABLED {
-        color: #6b7280;
+      .status-chip-RUNNING {
+        background: #dbeafe;
+        color: #1d4ed8;
+      }
+      .status-chip-WAITING {
+        background: #d1fae5;
+        color: #047857;
+      }
+      .status-chip-ERROR {
+        background: #fee2e2;
+        color: #b91c1c;
+      }
+      .status-chip-DISABLED {
+        background: #f3f4f6;
+        color: #4b5563;
+      }
+      .status-chip- {
+        background: #f3f4f6;
+        color: #374151;
+      }
+      .status-chip-EMPTY {
+        background: #f3f4f6;
+        color: #374151;
+      }
+      .btn-sm {
+        font-size: 0.72rem;
+        padding: 0.2rem 0.45rem;
+        white-space: nowrap;
+      }
+      .note-cell {
+        min-width: 10rem;
+        max-width: 14rem;
+      }
+      .note-cell textarea.note-inline {
+        width: 100%;
+        box-sizing: border-box;
+        font-size: 0.72rem;
+        margin-bottom: 0.25rem;
+        display: block;
+      }
+      td.col-detail {
+        max-width: 16rem;
+        font-size: 0.75rem;
+        line-height: 1.35;
       }
       pre {
         background: #f4f4f4;
@@ -185,6 +236,10 @@
       <p class="note" style="margin: 0.25rem 0 0.5rem">
         Slack のチャンネル名（先頭の # は省略可・名前は小文字で照合）。<strong>公開チャンネル（非アーカイブ）のみ</strong>対象です。プライベートは UI からは登録しません。
       </p>
+      <p class="note" style="margin: 0 0 0.5rem">
+        新規チャンネル登録前に、登録したいパブリックチャンネルに <strong>slackLogToDrive</strong> アプリを追加してください。アプリは
+        <strong>チャンネル設定 &gt; インテグレーション &gt; アプリを追加</strong> から追加できます。
+      </p>
       <div class="register-row">
         <input type="text" id="register-name" placeholder="general" autocomplete="off" />
         <button type="button" id="btn-register">登録</button>
@@ -225,21 +280,22 @@
       <table>
         <thead>
           <tr>
-            <th></th>
-            <th>行</th>
+            <th>優先申請</th>
             <th>チャンネル名</th>
-            <th>channel_id</th>
-            <th>status</th>
-            <th>sort_last_run_at</th>
-            <th>live_last_message_at</th>
-            <th>last_error_at</th>
-            <th>last_error_message</th>
-            <th>ui_last_updated_at</th>
+            <th>チャンネル ID</th>
+            <th>ステータス</th>
+            <th>取得状況</th>
+            <th>取得状況詳細</th>
+            <th>最終取得日時</th>
+            <th>エラー情報</th>
+            <th>有効/無効</th>
+            <th>Note</th>
+            <th></th>
           </tr>
         </thead>
         <tbody id="tbody">
           <tr>
-            <td colspan="10">読み込み中…</td>
+            <td colspan="11">読み込み中…</td>
           </tr>
         </tbody>
       </table>
@@ -412,11 +468,88 @@
             .apiGetChannelDetail(sheetRow);
         }
 
+        function showListActionErr(msg) {
+          listErr.textContent = msg || "操作に失敗しました";
+          listErr.hidden = false;
+        }
+
         tbody.addEventListener("click", function (ev) {
           var t = ev.target;
-          if (t && t.classList && t.classList.contains("btn-edit")) {
-            var sr = t.getAttribute("data-sheet-row");
-            if (sr) openDetail(parseInt(sr, 10));
+          if (!t || !t.classList) return;
+
+          if (t.classList.contains("btn-edit")) {
+            var srEdit = t.getAttribute("data-sheet-row");
+            if (srEdit) openDetail(parseInt(srEdit, 10));
+            return;
+          }
+
+          if (t.classList.contains("btn-priority")) {
+            var srP = t.getAttribute("data-sheet-row");
+            if (!srP || t.disabled) return;
+            listErr.hidden = true;
+            t.disabled = true;
+            google.script.run
+              .withSuccessHandler(function (r) {
+                if (!r || !r.ok) {
+                  showListActionErr((r && r.message) || "優先申請に失敗しました");
+                  t.disabled = false;
+                  return;
+                }
+                fetchList();
+              })
+              .withFailureHandler(function (e) {
+                showListActionErr(e && e.message ? e.message : String(e));
+                t.disabled = false;
+              })
+              .apiRequestPriorityInterrupt(parseInt(srP, 10));
+            return;
+          }
+
+          if (t.classList.contains("btn-toggle-enabled")) {
+            var srT = t.getAttribute("data-sheet-row");
+            if (!srT || t.disabled) return;
+            listErr.hidden = true;
+            t.disabled = true;
+            google.script.run
+              .withSuccessHandler(function (r) {
+                if (!r || !r.ok) {
+                  showListActionErr((r && r.message) || "切り替えに失敗しました");
+                  t.disabled = false;
+                  return;
+                }
+                fetchList();
+              })
+              .withFailureHandler(function (e) {
+                showListActionErr(e && e.message ? e.message : String(e));
+                t.disabled = false;
+              })
+              .apiToggleWaitingDisabled(parseInt(srT, 10));
+            return;
+          }
+
+          if (t.classList.contains("btn-save-note")) {
+            var srN = t.getAttribute("data-sheet-row");
+            if (!srN) return;
+            var ta = tbody.querySelector(
+              "textarea.note-inline[data-sheet-row=\"" + srN.replace(/"/g, "") + "\"]"
+            );
+            if (!ta) return;
+            listErr.hidden = true;
+            t.disabled = true;
+            google.script.run
+              .withSuccessHandler(function (r) {
+                t.disabled = false;
+                if (!r || !r.ok) {
+                  showListActionErr((r && r.message) || "Note の保存に失敗しました");
+                  return;
+                }
+                fetchList();
+              })
+              .withFailureHandler(function (e) {
+                t.disabled = false;
+                showListActionErr(e && e.message ? e.message : String(e));
+              })
+              .apiQuickSaveNote({ sheetRow: parseInt(srN, 10), note: ta.value });
           }
         });
 
@@ -473,7 +606,7 @@
           if (!res || !res.ok) {
             listErr.textContent = (res && res.message) || "一覧の取得に失敗しました。";
             listErr.hidden = false;
-            tbody.innerHTML = '<tr><td colspan="10">—</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="11">—</td></tr>';
             listMeta.textContent = "";
             btnPrev.disabled = true;
             btnNext.disabled = true;
@@ -488,7 +621,15 @@
           var from = tf === 0 ? 0 : p * ps + 1;
           var to = Math.min((p + 1) * ps, tf);
           listMeta.textContent =
-            "該当 " + tf + " 件（表示 " + from + "–" + to + "、1 ページあたり最大 " + ps + " 件）";
+            "該当 " +
+            tf +
+            " 件（表示 " +
+            from +
+            "–" +
+            to +
+            "、1 ページあたり最大 " +
+            ps +
+            " 件）。同期ワーカーの対象行選定（設計 §6.3）と同じ優先順で上から並んでいます。";
 
           btnPrev.disabled = p <= 0;
           btnNext.disabled = tp === 0 || p >= tp - 1;
@@ -496,56 +637,78 @@
             tp === 0 ? "ページなし" : "ページ " + (p + 1) + " / " + tp;
 
           if (!res.rows || res.rows.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="10">該当行がありません</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="11">該当行がありません</td></tr>';
             return;
           }
 
           var html = "";
           for (var i = 0; i < res.rows.length; i++) {
             var r = res.rows[i];
-            var st = esc(r.status);
-            var stClass = r.status ? "status-" + esc(r.status) : "";
+            var stDisp = esc(r.status || "");
+            var stSafe = String(r.status || "")
+              .replace(/[^A-Za-z0-9_]/g, "")
+              .toUpperCase();
+            if (!stSafe) stSafe = "EMPTY";
             html +=
               "<tr>" +
-              '<td><button type="button" class="btn-edit" data-sheet-row="' +
-              esc(r.sheetRow) +
-              '">編集</button></td>' +
               "<td>" +
+              '<button type="button" class="btn-sm btn-priority" data-sheet-row="' +
               esc(r.sheetRow) +
-              "</td>" +
+              '"' +
+              (r.priority_interrupt_at_empty ? "" : " disabled") +
+              ">優先申請</button></td>" +
               "<td>" +
               esc(r.channel_name_current) +
               "</td>" +
               '<td class="mono">' +
               esc(r.channel_id) +
               "</td>" +
-              '<td class="' +
-              stClass +
+              "<td>" +
+              '<span class="status-chip status-chip-' +
+              esc(stSafe) +
               '">' +
-              st +
+              stDisp +
+              "</span></td>" +
+              "<td>" +
+              esc(r.fetch_status_label) +
+              "</td>" +
+              '<td class="col-detail">' +
+              esc(r.fetch_status_detail) +
               "</td>" +
               "<td>" +
               esc(r.sort_last_run_at) +
               "</td>" +
-              "<td>" +
-              esc(r.live_last_message_at) +
+              "<td class=\"col-detail\">" +
+              esc(r.last_error_line) +
               "</td>" +
               "<td>" +
-              esc(r.last_error_at) +
-              "</td>" +
+              '<button type="button" class="btn-sm btn-toggle-enabled" data-sheet-row="' +
+              esc(r.sheetRow) +
+              '"' +
+              (r.can_toggle_enabled ? "" : " disabled") +
+              ">" +
+              esc(r.toggle_enabled_label || "—") +
+              "</button></td>" +
+              '<td class="note-cell">' +
+              '<textarea class="note-inline" rows="2" data-sheet-row="' +
+              esc(r.sheetRow) +
+              '">' +
+              esc(r.note != null ? String(r.note) : "") +
+              "</textarea>" +
+              '<button type="button" class="btn-sm btn-save-note" data-sheet-row="' +
+              esc(r.sheetRow) +
+              '">保存</button></td>' +
               "<td>" +
-              esc(r.last_error_message) +
-              "</td>" +
-              "<td>" +
-              esc(r.ui_last_updated_at) +
-              "</td>" +
+              '<button type="button" class="btn-edit btn-sm" data-sheet-row="' +
+              esc(r.sheetRow) +
+              '">詳細</button></td>' +
               "</tr>";
           }
           tbody.innerHTML = html;
         }
 
         function fetchList() {
-          tbody.innerHTML = '<tr><td colspan="10">読み込み中…</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="11">読み込み中…</td></tr>';
           google.script.run
             .withSuccessHandler(renderList)
             .withFailureHandler(function (e) {

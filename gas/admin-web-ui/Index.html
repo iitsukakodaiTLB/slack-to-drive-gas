@@ -154,10 +154,45 @@
         font-size: 0.75rem;
         padding: 0.2rem 0.45rem;
       }
+      .register-box {
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        padding: 0.75rem 1rem;
+        margin-bottom: 1rem;
+        background: #f9fafb;
+      }
+      .register-box h2 {
+        margin-top: 0;
+        font-size: 1rem;
+      }
+      .register-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      #register-name {
+        min-width: 14rem;
+        padding: 0.35rem 0.5rem;
+      }
     </style>
   </head>
   <body>
     <h1>Slack 同期 管理</h1>
+
+    <section class="register-box" aria-labelledby="register-heading">
+      <h2 id="register-heading">新規チャンネル登録</h2>
+      <p class="note" style="margin: 0.25rem 0 0.5rem">
+        Slack のチャンネル名（先頭の # は省略可・名前は小文字で照合）。Bot が参加している
+        public / private チャンネル（非アーカイブ）のみ対象です。
+      </p>
+      <div class="register-row">
+        <input type="text" id="register-name" placeholder="general" autocomplete="off" />
+        <button type="button" id="btn-register">登録</button>
+      </div>
+      <p id="register-msg" class="note" style="margin: 0.5rem 0 0"></p>
+      <p id="register-err" class="err" style="margin: 0.25rem 0 0" hidden></p>
+    </section>
 
     <div class="toolbar">
       <label>
@@ -577,6 +612,40 @@
               out.textContent = "エラー: " + (e && e.message ? e.message : String(e));
             })
             .apiGetHealth();
+        });
+
+        var registerName = document.getElementById("register-name");
+        var registerMsg = document.getElementById("register-msg");
+        var registerErr = document.getElementById("register-err");
+        document.getElementById("btn-register").addEventListener("click", function () {
+          registerErr.hidden = true;
+          registerErr.textContent = "";
+          registerMsg.textContent = "";
+          var v = registerName ? registerName.value : "";
+          google.script.run
+            .withSuccessHandler(function (r) {
+              if (!r || !r.ok) {
+                registerErr.textContent = (r && r.message) || "登録に失敗しました";
+                registerErr.hidden = false;
+                return;
+              }
+              registerMsg.textContent =
+                (r.message || "登録しました") +
+                " 行 " +
+                r.sheetRow +
+                " / " +
+                (r.channel_name || "") +
+                " (" +
+                (r.channel_id || "") +
+                ")";
+              registerName.value = "";
+              fetchList();
+            })
+            .withFailureHandler(function (e) {
+              registerErr.textContent = e && e.message ? e.message : String(e);
+              registerErr.hidden = false;
+            })
+            .apiRegisterChannel({ channelNameInput: v });
         });
 
         fetchList();

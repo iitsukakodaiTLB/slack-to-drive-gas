@@ -26,6 +26,12 @@
 - 保存時に `ui_last_updated_at` と `ui_last_updated_by`（デプロイ担当者メール、空の場合あり）を更新。
 - `RUNNING` 中は **status のみ**変更不可（note / 優先割り込みは可）。
 
+## Phase 4（新規チャンネル登録）
+
+- 画面上部のフォームから **チャンネル名**を入力し、`conversations.list` で **public / private（非アーカイブ）**を走査して名前一致（`#` 除去・小文字）で `channel_id` を決定。
+- 既に `channel_sync_state` に同じ `channel_id` があれば登録しない。
+- Bot に **channels:read**（private には **groups:read** 相当・チャンネルへの参加）が必要。`SLACK_BOT_TOKEN` を Script Properties に設定すること。
+
 ## 操作者ログについて（方針）
 
 - **来訪者ごとのメール（誰がボタンを押したか）は記録しない**前提とする。

@@ -587,6 +587,24 @@ function executeSyncForChannel_(ss, channelSheet, target, runId, startedAt) {
     }
   }
 
+  // 3) Optional safety-net for recent posts that just got first replies.
+  apiCalls += seedRecentThreadParentsForChannel_(
+    threadSheet,
+    channelId,
+    deadlineMs,
+    apiCalls
+  );
+
+  // 4) Optional recheck for DONE threads to detect later replies.
+  apiCalls += recheckDoneThreadsForChannel_(
+    threadSheet,
+    channelId,
+    fileCtx,
+    userResolver,
+    deadlineMs,
+    apiCalls
+  );
+
   // Keep thread_queue size manageable without archive sheet.
   purgeExpiredDoneThreadQueue_(threadSheet, CONFIG.THREAD_QUEUE.DONE_RETENTION_DAYS);
 }
@@ -754,6 +772,227 @@ function processThreadQueueForChannel_(
     }
   }
   return callsUsed;
+}
+
+/**
+ * Optional safety-net:
+ * scans recent history window and enqueues parent threads with reply_count > 0.
+ * This must not mutate channel_sync_state cursors used by normal LIVE/BACKFILL flow.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} threadSheet
+ * @param {string} channelId
+ * @param {number} deadlineMs
+ * @param {number} apiCalls
+ * @returns {number} used API calls
+ */
+function seedRecentThreadParentsForChannel_(threadSheet, channelId, deadlineMs, apiCalls) {
+  if (!CONFIG.THREAD_QUEUE.ENABLE_RECENT_THREAD_SEED) {
+    return 0;
+  }
+  if (!channelId) {
+    return 0;
+  }
+  const maxCalls = Number(CONFIG.THREAD_QUEUE.RECENT_THREAD_SEED_MAX_HISTORY_CALLS_PER_RUN || 0);
+  if (maxCalls <= 0) {
+    return 0;
+  }
+
+  const windowDays = Math.max(
+    1,
+    Number(CONFIG.THREAD_QUEUE.RECENT_THREAD_SEED_WINDOW_DAYS || 7)
+  );
+  const oldestEpochSec = Math.floor(
+    (Date.now() - windowDays * 24 * 60 * 60 * 1000) / 1000
+  );
+
+  let callsUsed = 0;
+  let cursor = "";
+  while (
+    Date.now() < deadlineMs - 3000 &&
+    apiCalls + callsUsed < CONFIG.EXECUTION.MAX_API_CALLS_PER_RUN &&
+    callsUsed < maxCalls
+  ) {
+    const res = slackConversationsHistory_({
+      channel: channelId,
+      oldest: String(oldestEpochSec),
+      cursor: cursor || undefined,
+      inclusive: false,
+      limit: CONFIG.SLACK.HISTORY_LIMIT_PER_REQUEST,
+    });
+    callsUsed += 1;
+
+    const messages = Array.isArray(res.messages) ? res.messages : [];
+    if (messages.length > 0) {
+      enqueueThreadParents_(threadSheet, channelId, messages);
+    }
+
+    cursor = toStringSafe_(res.response_metadata && res.response_metadata.next_cursor);
+    if (!cursor) {
+      break;
+    }
+  }
+  return callsUsed;
+}
+
+/**
+ * Optional safety-net:
+ * periodically rechecks DONE thread_queue rows for later replies.
+ * Uses DONE row lock_until as "next recheck at" to avoid schema changes.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} threadSheet
+ * @param {string} channelId
+ * @param {{csvFile: GoogleAppsScript.Drive.File, jsonlFile: GoogleAppsScript.Drive.File}} fileCtx
+ * @param {{resolve:function(string):string}} userResolver
+ * @param {number} deadlineMs
+ * @param {number} apiCalls
+ * @returns {number} used API calls
+ */
+function recheckDoneThreadsForChannel_(
+  threadSheet,
+  channelId,
+  fileCtx,
+  userResolver,
+  deadlineMs,
+  apiCalls
+) {
+  if (!CONFIG.THREAD_QUEUE.ENABLE_DONE_THREAD_RECHECK) {
+    return 0;
+  }
+  const perRun = Number(CONFIG.THREAD_QUEUE.DONE_THREAD_RECHECK_PER_RUN || 0);
+  if (perRun <= 0) {
+    return 0;
+  }
+
+  const now = new Date();
+  const candidates = listDoneThreadQueueRecheckCandidates_(threadSheet, channelId, now, perRun);
+  if (candidates.length === 0) {
+    return 0;
+  }
+
+  let callsUsed = 0;
+  for (let i = 0; i < candidates.length; i += 1) {
+    if (Date.now() >= deadlineMs - 3000) {
+      break;
+    }
+    if (apiCalls + callsUsed >= CONFIG.EXECUTION.MAX_API_CALLS_PER_RUN) {
+      break;
+    }
+    const item = candidates[i];
+    const res = slackConversationsReplies_({
+      channel: channelId,
+      ts: item.parentThreadTs,
+      oldest: item.lastReplyTsProcessed || undefined,
+      inclusive: false,
+      limit: CONFIG.SLACK.REPLIES_LIMIT_PER_REQUEST,
+    });
+    callsUsed += 1;
+
+    const replies = (res.messages || []).filter((m) => {
+      const ts = toStringSafe_(m.ts);
+      if (!ts || ts === item.parentThreadTs) {
+        return false;
+      }
+      if (item.lastReplyTsProcessed && Number(ts) <= Number(item.lastReplyTsProcessed)) {
+        return false;
+      }
+      return true;
+    });
+
+    if (replies.length > 0) {
+      appendMessagesToLogs_(fileCtx, channelId, replies, userResolver);
+      const maxTs = getMaxTsFromMessages_(replies);
+      if (maxTs) {
+        setTsCellValue_(
+          threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.LAST_REPLY_TS_PROCESSED),
+          maxTs
+        );
+      }
+    }
+
+    const nextCursor = toStringSafe_(res.response_metadata && res.response_metadata.next_cursor);
+    if (nextCursor) {
+      // Large update: continue from normal queue processor to stay resumable.
+      threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.STATUS).setValue(THREAD_QUEUE_STATUS.PENDING);
+      threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.REPLIES_NEXT_CURSOR).setValue(nextCursor);
+      threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.LOCK_OWNER).clearContent();
+      threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.LOCK_UNTIL).clearContent();
+      threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.UPDATED_AT).setValue(new Date());
+      continue;
+    }
+
+    threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.STATUS).setValue(THREAD_QUEUE_STATUS.DONE);
+    threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.REPLIES_NEXT_CURSOR).clearContent();
+    threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.RETRY_COUNT).setValue(0);
+    threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.LAST_ERROR_AT).clearContent();
+    threadSheet.getRange(item.rowIndex, COLS.THREAD_QUEUE.LAST_ERROR_MESSAGE).clearContent();
+    threadSheet
+      .getRange(item.rowIndex, COLS.THREAD_QUEUE.LOCK_UNTIL)
+      .setValue(calcDoneThreadNextRecheckAt_(new Date()));
+    // Keep UPDATED_AT as completion marker for retention policy.
+  }
+  return callsUsed;
+}
+
+/**
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {string} channelId
+ * @param {Date} now
+ * @param {number} limit
+ * @returns {{rowIndex:number,parentThreadTs:string,lastReplyTsProcessed:string,nextRecheckAt:Date|null}[]}
+ */
+function listDoneThreadQueueRecheckCandidates_(sheet, channelId, now, limit) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1 || !channelId || limit <= 0) {
+    return [];
+  }
+
+  const width = SHEET_HEADERS.THREAD_QUEUE.length;
+  const values = sheet.getRange(2, 1, lastRow - 1, width).getValues();
+  const items = [];
+  for (let i = 0; i < values.length; i += 1) {
+    const row = values[i];
+    if (toStringSafe_(row[COLS.THREAD_QUEUE.CHANNEL_ID - 1]) !== channelId) {
+      continue;
+    }
+    const status = toStringSafe_(row[COLS.THREAD_QUEUE.STATUS - 1]);
+    if (status !== THREAD_QUEUE_STATUS.DONE) {
+      continue;
+    }
+
+    const nextRecheckAt = toDateOrNull_(row[COLS.THREAD_QUEUE.LOCK_UNTIL - 1]);
+    if (nextRecheckAt && nextRecheckAt.getTime() > now.getTime()) {
+      continue;
+    }
+
+    const parentThreadTs = normalizeTsString_(row[COLS.THREAD_QUEUE.PARENT_THREAD_TS - 1]);
+    if (!parentThreadTs) {
+      continue;
+    }
+
+    items.push({
+      rowIndex: i + 2,
+      parentThreadTs: parentThreadTs,
+      lastReplyTsProcessed: normalizeTsString_(row[COLS.THREAD_QUEUE.LAST_REPLY_TS_PROCESSED - 1]),
+      nextRecheckAt: nextRecheckAt,
+    });
+  }
+
+  items.sort(function (a, b) {
+    return compareDateNullableAsc_(a.nextRecheckAt, b.nextRecheckAt);
+  });
+  return items.slice(0, limit);
+}
+
+/**
+ * @param {Date} now
+ * @returns {Date}
+ */
+function calcDoneThreadNextRecheckAt_(now) {
+  const hours = Math.max(
+    1,
+    Number(CONFIG.THREAD_QUEUE.DONE_THREAD_RECHECK_MIN_INTERVAL_HOURS || 24)
+  );
+  return new Date(now.getTime() + hours * 60 * 60 * 1000);
 }
 
 function listThreadQueueItemsForChannel_(sheet, channelId) {

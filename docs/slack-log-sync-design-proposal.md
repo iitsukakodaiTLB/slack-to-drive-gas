@@ -194,6 +194,34 @@
 - スレッドは `reply_count > 0` の親を必ず `thread_queue` へ登録。
 - `thread_queue` が空で、かつ `history` 側が最新到達ならその実行分完了。
 
+### 5.5 スレッド再取得（DONE 後の返信; Events API なし）
+
+`conversations.history` の LIVE 増分だけでは、すでに `DONE` 済みのスレッドにあとから付いた返信を取りこぼし得る（親メッセージの `ts` がウィンドウ外で再び history に現れないため）。Events API は採用せず、次の 2 段で取りこぼしを減らす（完全保証はしない）。
+
+#### A. 直近ウィンドウ・シード（初めて返信が付いた親）
+
+- 目的: 親メッセージの投稿が直近 `W` 日以内で、かつ `reply_count > 0` の親を、まだ `thread_queue` に無い場合に `PENDING` で追加する。
+- 手段: `conversations.history` を、LIVE 用カーソルとは別に `oldest ≒ now - W days` で呼び出し、レスポンス中のメッセージからスレッド親を検出して `enqueueThreadParents_` に流す。
+- パラメータ（実装反映済み・ただしデフォルトは OFF）:
+  - `CONFIG.THREAD_QUEUE.ENABLE_RECENT_THREAD_SEED`: true で機能有効化
+  - `CONFIG.THREAD_QUEUE.RECENT_THREAD_SEED_WINDOW_DAYS`: 直近ウィンドウ日数（例: 7）
+  - `CONFIG.THREAD_QUEUE.RECENT_THREAD_SEED_MAX_HISTORY_CALLS_PER_RUN`: 1 実行あたりヒストリシードに使う最大 API 呼び出し数
+- 制約: 親メッセージ自体が `W` 日より古い場合に「初めて返信が付いた」ケースは、本シードでは拾えない（B で一部をカバーする）。
+
+#### B. DONE 行の間欠リチェック（過去スレッドの追加返信）
+
+- 目的: `thread_queue` の `status=DONE` 行について、`conversations.replies` を一定間隔で再度呼び出し、`last_reply_ts_processed` より新しい返信がないか確認する。
+- 手段:
+  - 対象: 当該チャンネルの `DONE` 行から、一定件数だけ候補を選ぶ。
+  - 境界: `oldest = last_reply_ts_processed`（排他）で `replies` を取得し、`message_ts` の冪等性で重複を吸収する。
+  - 追加返信があり `replies_next_cursor` が返った場合は、その行を `PENDING` に戻し、既存の `processThreadQueueForChannel_` で続きを処理させる。
+  - 追加返信がなく終端まで到達した場合は、`status=DONE` のまま `lock_until` に「次回リチェック予定時刻」を書き込み、頻度を制御する（別途列は増やさない）。
+- パラメータ（実装反映済み・デフォルト OFF）:
+  - `CONFIG.THREAD_QUEUE.ENABLE_DONE_THREAD_RECHECK`: true で機能有効化
+  - `CONFIG.THREAD_QUEUE.DONE_THREAD_RECHECK_PER_RUN`: 1 実行あたりリチェックする DONE 行数の上限
+  - `CONFIG.THREAD_QUEUE.DONE_THREAD_RECHECK_MIN_INTERVAL_HOURS`: 同一 DONE 行を再チェックするまでの最小インターバル（`lock_until` による制御）
+- 既存の `DONE_RETENTION_DAYS`（90 日）と組み合わせることで、「90 日より古い DONE 行は削除され、その後の返信は対象外」という運用も許容される。
+
 ---
 
 ## 6. トリガー頻度・1回処理フロー・対象行選定ルール

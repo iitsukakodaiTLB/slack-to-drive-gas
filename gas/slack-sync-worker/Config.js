@@ -52,6 +52,13 @@ const CONFIG = Object.freeze({
     MAX_RETRY_COUNT: 5,
     ERROR_RETRY_BASE_MINUTES: 5,
     ERROR_RETRY_MAX_MINUTES: 180,
+    // Safety-first rollout: keep disabled until explicitly enabled.
+    ENABLE_RECENT_THREAD_SEED: false,
+    RECENT_THREAD_SEED_WINDOW_DAYS: 7,
+    RECENT_THREAD_SEED_MAX_HISTORY_CALLS_PER_RUN: 3,
+    ENABLE_DONE_THREAD_RECHECK: false,
+    DONE_THREAD_RECHECK_PER_RUN: 20,
+    DONE_THREAD_RECHECK_MIN_INTERVAL_HOURS: 24,
   }),
 });
 
